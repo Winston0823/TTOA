@@ -2,6 +2,8 @@ import { CONFIG } from "./config";
 import type { Fish } from "./fish";
 import type { Rope } from "./rope";
 
+const INK = CONFIG.ink;
+
 /** A transient bump in the waterline, from a fish pass or a landed catch. */
 export interface WaterBump {
   x: number;
@@ -45,10 +47,10 @@ export function drawCamera(
   h: number
 ) {
   if (!video || video.readyState < 2) {
-    // Camera unavailable — fall back to a calm gradient so the game still reads.
+    // Camera unavailable — fall back to the ink void so the game still reads.
     const g = ctx.createLinearGradient(0, 0, 0, h);
-    g.addColorStop(0, "#123f47");
-    g.addColorStop(1, "#0b2e33");
+    g.addColorStop(0, INK.voidTop);
+    g.addColorStop(1, INK.voidBottom);
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, w, h);
     return;
@@ -69,8 +71,8 @@ export function drawCamera(
 }
 
 /**
- * The translucent water layer. Drawn AFTER submerged fish so it softens them,
- * and BEFORE the rope so the rope stays crisp on top.
+ * The translucent ink water layer. Drawn AFTER submerged fish so it softens
+ * them, and BEFORE the rope so the rope stays crisp on top.
  */
 export function drawWaterLayer(
   ctx: CanvasRenderingContext2D,
@@ -80,34 +82,46 @@ export function drawWaterLayer(
   elapsed: number,
   bumps: WaterBump[]
 ) {
+  // Sample the surface ONCE per frame and reuse the points for the fill and
+  // both strokes. Recomputing the sine + every active bump three times per
+  // frame was pure waste.
+  const STEP = 8;
+  const pts: number[] = [];
+  for (let x = 0; x <= w; x += STEP) pts.push(waterlineY(x, baseY, elapsed, bumps));
+
+  const tracePath = () => {
+    ctx.beginPath();
+    ctx.moveTo(0, pts[0]);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(i * STEP, pts[i]);
+  };
+
   ctx.save();
-  ctx.beginPath();
-  ctx.moveTo(0, h);
-  ctx.lineTo(0, waterlineY(0, baseY, elapsed, bumps));
-  for (let x = 0; x <= w; x += 8) {
-    ctx.lineTo(x, waterlineY(x, baseY, elapsed, bumps));
-  }
+  tracePath();
   ctx.lineTo(w, h);
+  ctx.lineTo(0, h);
   ctx.closePath();
 
   const g = ctx.createLinearGradient(0, baseY, 0, h);
-  g.addColorStop(0, "rgba(46, 158, 158, 0.86)");
-  g.addColorStop(0.45, "rgba(24, 116, 124, 0.94)");
-  g.addColorStop(1, "rgba(9, 62, 74, 1)");
+  g.addColorStop(0, INK.waterTop);
+  g.addColorStop(0.45, INK.waterMid);
+  g.addColorStop(1, INK.waterDeep);
   ctx.globalAlpha = CONFIG.water.alpha;
   ctx.fillStyle = g;
   ctx.fill();
   ctx.globalAlpha = 1;
 
-  // Crisp surface line so the boundary is unambiguous.
-  ctx.beginPath();
-  ctx.moveTo(0, waterlineY(0, baseY, elapsed, bumps));
-  for (let x = 0; x <= w; x += 8) {
-    ctx.lineTo(x, waterlineY(x, baseY, elapsed, bumps));
-  }
-  ctx.strokeStyle = "rgba(226, 250, 248, 0.75)";
-  ctx.lineWidth = 3;
+  // Neon surface line, doubled: a soft glow under a crisp core.
+  ctx.lineJoin = "round";
+  ctx.strokeStyle = INK.surface;
+  tracePath();
+  ctx.globalAlpha = 0.18;
+  ctx.lineWidth = 11;
   ctx.stroke();
+  tracePath();
+  ctx.globalAlpha = 0.95;
+  ctx.lineWidth = 3.5;
+  ctx.stroke();
+  ctx.globalAlpha = 1;
   ctx.restore();
 }
 
@@ -120,8 +134,8 @@ export function drawCaustics(
   elapsed: number
 ) {
   ctx.save();
-  ctx.globalAlpha = 0.07;
-  ctx.strokeStyle = "#eafbff";
+  ctx.globalAlpha = 0.09;
+  ctx.strokeStyle = INK.caustic;
   ctx.lineWidth = 14;
   for (let i = 0; i < 5; i++) {
     const y = baseY + 70 + i * ((h - baseY) / 5);
@@ -141,89 +155,177 @@ export function drawCaustics(
 // ---------------------------------------------------------------------------
 
 /**
- * Procedural fish in the same style as the generated sprites — used when a
- * sprite fails to load. Chunky rounded body, thick black outline, flat fill.
+ * Procedural fish in the ink style — used when a sprite fails to load.
+ * Angular chunky body, thick near-black outline, flat neon fill.
  */
-function drawProceduralFish(ctx: CanvasRenderingContext2D, w: number, variant: number) {
-  const palettes = [
-    ["#ff6b4a", "#ffd9c2"],
-    ["#ffb43d", "#ffeccd"],
-    ["#f2557f", "#ffd6e0"],
-  ];
-  const [body, belly] = palettes[variant % palettes.length];
+function drawProceduralFish(ctx: CanvasRenderingContext2D, w: number, rare: boolean) {
+  const body = rare ? "#ffc61e" : "#ff2d9b";
+  const belly = rare ? "#ff8a2b" : "#ffe9a3";
   const h = w * 0.62;
 
   ctx.lineJoin = "round";
   ctx.lineCap = "round";
-  ctx.lineWidth = w * 0.055;
-  ctx.strokeStyle = "#1a1410";
+  ctx.lineWidth = w * 0.075;
+  ctx.strokeStyle = "#120a20";
 
-  // Tail
+  // Tail — angular, not rounded.
   ctx.beginPath();
-  ctx.moveTo(w * 0.3, 0);
-  ctx.lineTo(w * 0.5, -h * 0.36);
-  ctx.lineTo(w * 0.5, h * 0.36);
+  ctx.moveTo(w * 0.28, 0);
+  ctx.lineTo(w * 0.52, -h * 0.4);
+  ctx.lineTo(w * 0.44, 0);
+  ctx.lineTo(w * 0.52, h * 0.4);
   ctx.closePath();
   ctx.fillStyle = body;
   ctx.fill();
   ctx.stroke();
 
-  // Body
+  // Body — a hard-edged lozenge rather than an ellipse.
   ctx.beginPath();
-  ctx.ellipse(0, 0, w * 0.42, h * 0.45, 0, 0, Math.PI * 2);
+  ctx.moveTo(-w * 0.46, 0);
+  ctx.lineTo(-w * 0.16, -h * 0.44);
+  ctx.lineTo(w * 0.22, -h * 0.3);
+  ctx.lineTo(w * 0.32, 0);
+  ctx.lineTo(w * 0.22, h * 0.3);
+  ctx.lineTo(-w * 0.16, h * 0.44);
+  ctx.closePath();
   ctx.fillStyle = body;
   ctx.fill();
   ctx.stroke();
 
-  // Belly
+  // Belly flash.
   ctx.beginPath();
-  ctx.ellipse(-w * 0.05, h * 0.14, w * 0.3, h * 0.2, 0, 0, Math.PI * 2);
+  ctx.moveTo(-w * 0.24, h * 0.1);
+  ctx.lineTo(w * 0.02, h * 0.32);
+  ctx.lineTo(w * 0.16, h * 0.06);
+  ctx.closePath();
   ctx.fillStyle = belly;
   ctx.fill();
 
-  // Eye
+  // Angular slanted eye.
   ctx.beginPath();
-  ctx.arc(-w * 0.24, -h * 0.12, w * 0.07, 0, Math.PI * 2);
-  ctx.fillStyle = "#fffaf2";
+  ctx.moveTo(-w * 0.3, -h * 0.16);
+  ctx.lineTo(-w * 0.16, -h * 0.22);
+  ctx.lineTo(-w * 0.18, -h * 0.04);
+  ctx.closePath();
+  ctx.fillStyle = "#120a20";
   ctx.fill();
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.arc(-w * 0.255, -h * 0.12, w * 0.033, 0, Math.PI * 2);
-  ctx.fillStyle = "#1a1410";
-  ctx.fill();
+}
+
+/**
+ * Draws a sprite as vertical slices, each vertically offset by a travelling
+ * sine wave. Head stiff, tail whipping — the same math the exported sprite
+ * sheets were baked from, run live so it isn't locked to a frame count.
+ */
+function drawDeformed(
+  ctx: CanvasRenderingContext2D,
+  img: HTMLImageElement,
+  w: number,
+  h: number,
+  t: number,
+  cfg: { tailAmp: number; waveLength: number; hz: number; archAmp?: number }
+) {
+  const { slices, stiffness } = CONFIG.deform;
+  const iw = img.naturalWidth;
+  const ih = img.naturalHeight;
+  const sliceW = iw / slices;
+
+  for (let i = 0; i < slices; i++) {
+    const u = slices > 1 ? i / (slices - 1) : 0; // 0 at head (left), 1 at tail
+    const ramp = Math.pow(u, stiffness);
+
+    let dy =
+      cfg.tailAmp * h * ramp * Math.sin(2 * Math.PI * (t * cfg.hz - u / cfg.waveLength));
+    if (cfg.archAmp) {
+      dy +=
+        cfg.archAmp * h * Math.sin(Math.PI * u) * Math.sin(2 * Math.PI * t * cfg.hz);
+    }
+
+    ctx.drawImage(
+      img,
+      i * sliceW,
+      0,
+      sliceW,
+      ih,
+      -w / 2 + (i / slices) * w,
+      -h / 2 + dy,
+      w / slices + 1, // +1 closes the seam between slices
+      h
+    );
+  }
 }
 
 export function drawFish(
   ctx: CanvasRenderingContext2D,
   f: Fish,
-  sprites: (HTMLImageElement | null)[],
+  sprites: { common: HTMLImageElement | null; rare: HTMLImageElement | null },
   elapsed: number
 ) {
-  const w = CONFIG.fish.width;
-  const sprite = sprites[f.variant % sprites.length];
+  const rare = f.rarity === "rare";
+  const sprite = rare ? sprites.rare : sprites.common;
+  const w = f.width;
 
   ctx.save();
   ctx.globalAlpha = f.fade;
   ctx.translate(f.x, f.y);
 
-  // Wind-up twitch: a quick rotational shudder synchronized to each tick.
+  // Rarity is signalled procedurally, not baked into the sprite — it scales
+  // cleanly at any size and reads at 96px where sprite detail would not.
+  if (rare && f.state !== "flung") {
+    drawRarityGlow(ctx, w, elapsed);
+  }
+
+  const hooked = f.state === "hooked";
+  const anim = hooked ? CONFIG.deform.hooked : CONFIG.deform.swim;
+
+  // Whole-body roll. Sharper and faster while fighting the hook.
+  const roll = anim.rot * Math.sin(2 * Math.PI * f.animTime * anim.hz);
+  // The wind-up twitch is a separate high-frequency shudder on top.
   const twitchAngle = f.twitch * Math.sin(elapsed * 60) * 0.22;
-  const struggle =
-    f.state === "hooked" ? Math.sin(elapsed * 22) * 0.34 : 0;
-  ctx.rotate(twitchAngle + struggle);
+  // A thrown fish tumbles freely — that spin is the whole payoff of the fling.
+  ctx.rotate(f.state === "flung" ? f.spin : roll + twitchAngle);
 
   // Sprite art faces left, so flip when swimming right.
   if (f.dir === 1) ctx.scale(-1, 1);
 
-  // A gentle scale pulse during the wind-up reads as "loading up".
   const s = 1 + f.twitch * 0.1;
   ctx.scale(s, s);
 
   if (sprite && sprite.complete && sprite.naturalWidth > 0) {
-    const aspect = sprite.naturalHeight / sprite.naturalWidth;
-    ctx.drawImage(sprite, -w / 2, (-w * aspect) / 2, w, w * aspect);
+    const h = w * (sprite.naturalHeight / sprite.naturalWidth);
+    drawDeformed(ctx, sprite, w, h, f.animTime, anim);
   } else {
-    drawProceduralFish(ctx, w, f.variant);
+    drawProceduralFish(ctx, w, rare);
+  }
+  ctx.restore();
+}
+
+/** Pulsing ink ring + orbiting flecks. The entire rare-fish tell. */
+function drawRarityGlow(ctx: CanvasRenderingContext2D, w: number, elapsed: number) {
+  const pulse = (Math.sin(elapsed * 3.4) + 1) / 2;
+
+  ctx.save();
+  for (let r = 0; r < 3; r++) {
+    const radius = w * (0.5 + r * 0.14) + pulse * 9;
+    ctx.beginPath();
+    ctx.arc(0, 0, radius, 0, Math.PI * 2);
+    ctx.strokeStyle = INK.rareGlow;
+    ctx.globalAlpha = 0.3 * (1 - r / 3) * (0.55 + pulse * 0.45);
+    ctx.lineWidth = 3;
+    ctx.stroke();
+  }
+
+  // Flecks of ink orbiting the fish.
+  ctx.globalAlpha = 0.75;
+  ctx.fillStyle = INK.rareGlow;
+  for (let i = 0; i < 5; i++) {
+    const a = elapsed * 1.1 + (i / 5) * Math.PI * 2;
+    const rad = w * 0.62 + Math.sin(elapsed * 2.6 + i) * 6;
+    const px = Math.cos(a) * rad;
+    const py = Math.sin(a) * rad * 0.55;
+    const sz = 2.5 + Math.sin(elapsed * 4 + i * 2) * 1.2;
+    ctx.beginPath();
+    ctx.arc(px, py, Math.max(0.6, sz), 0, Math.PI * 2);
+    ctx.fill();
   }
   ctx.restore();
 }
@@ -236,25 +338,23 @@ function drawProceduralHook(ctx: CanvasRenderingContext2D, size: number) {
   ctx.lineJoin = "round";
   ctx.lineCap = "round";
 
-  // Bead
   ctx.beginPath();
   ctx.arc(0, -size * 0.28, size * 0.2, 0, Math.PI * 2);
-  ctx.fillStyle = "#ffb43d";
+  ctx.fillStyle = "#ff8a2b";
   ctx.fill();
-  ctx.lineWidth = size * 0.09;
-  ctx.strokeStyle = "#1a1410";
+  ctx.lineWidth = size * 0.11;
+  ctx.strokeStyle = "#120a20";
   ctx.stroke();
 
-  // Shank + curve
   ctx.beginPath();
   ctx.moveTo(0, -size * 0.12);
   ctx.lineTo(0, size * 0.2);
   ctx.arc(-size * 0.17, size * 0.2, size * 0.17, 0, Math.PI, false);
   ctx.lineTo(-size * 0.34, size * 0.02);
-  ctx.strokeStyle = "#1a1410";
-  ctx.lineWidth = size * 0.13;
+  ctx.strokeStyle = "#120a20";
+  ctx.lineWidth = size * 0.15;
   ctx.stroke();
-  ctx.strokeStyle = "#d8dde0";
+  ctx.strokeStyle = "#eef4f8";
   ctx.lineWidth = size * 0.07;
   ctx.stroke();
 }
@@ -272,23 +372,27 @@ export function drawRope(
   ctx.lineJoin = "round";
   ctx.lineCap = "round";
 
-  // Dark underlay gives the rope a thick cartoon outline against the water.
-  ctx.beginPath();
-  ctx.moveTo(nodes[0].x, nodes[0].y);
-  for (let i = 1; i < nodes.length - 1; i++) {
-    const xc = (nodes[i].x + nodes[i + 1].x) / 2;
-    const yc = (nodes[i].y + nodes[i + 1].y) / 2;
-    ctx.quadraticCurveTo(nodes[i].x, nodes[i].y, xc, yc);
-  }
-  ctx.lineTo(nodes[nodes.length - 1].x, nodes[nodes.length - 1].y);
-  ctx.strokeStyle = "#1a1410";
-  ctx.lineWidth = CONFIG.rope.lineWidth + 3;
+  const trace = () => {
+    ctx.beginPath();
+    ctx.moveTo(nodes[0].x, nodes[0].y);
+    for (let i = 1; i < nodes.length - 1; i++) {
+      const xc = (nodes[i].x + nodes[i + 1].x) / 2;
+      const yc = (nodes[i].y + nodes[i + 1].y) / 2;
+      ctx.quadraticCurveTo(nodes[i].x, nodes[i].y, xc, yc);
+    }
+    ctx.lineTo(nodes[nodes.length - 1].x, nodes[nodes.length - 1].y);
+  };
+
+  // Dark underlay gives the rope a thick stencil outline against the water.
+  trace();
+  ctx.strokeStyle = INK.ropeOutline;
+  ctx.lineWidth = CONFIG.rope.lineWidth + 3.5;
   ctx.stroke();
-  ctx.strokeStyle = "#fff3dc";
+  trace();
+  ctx.strokeStyle = INK.rope;
   ctx.lineWidth = CONFIG.rope.lineWidth;
   ctx.stroke();
 
-  // Hook
   const hook = rope.hook;
   const prev = nodes[nodes.length - 2];
   // Angle away from straight-down. Zero when the line hangs vertically, so the
@@ -303,17 +407,19 @@ export function drawRope(
       const radius = 26 + r * 16 + pulse * 14;
       ctx.beginPath();
       ctx.arc(hook.x, hook.y + 10 + pulse * 12, radius, 0, Math.PI * 2);
-      ctx.strokeStyle = `rgba(255, 214, 120, ${0.34 * glow * (1 - r / 3) * (1 - pulse * 0.4)})`;
+      ctx.strokeStyle = INK.surface;
+      ctx.globalAlpha = 0.34 * glow * (1 - r / 3) * (1 - pulse * 0.4);
       ctx.lineWidth = 4;
       ctx.stroke();
     }
-    // A downward arrow of light, biasing attention toward "go deeper".
+    ctx.globalAlpha = 0.55 * glow;
     ctx.beginPath();
     ctx.moveTo(hook.x, hook.y + 30 + pulse * 10);
     ctx.lineTo(hook.x, hook.y + 58 + pulse * 14);
-    ctx.strokeStyle = `rgba(255, 214, 120, ${0.5 * glow})`;
+    ctx.strokeStyle = INK.surface;
     ctx.lineWidth = 5;
     ctx.stroke();
+    ctx.globalAlpha = 1;
   }
 
   ctx.save();
@@ -332,21 +438,55 @@ export function drawRope(
   ctx.restore();
 }
 
-/** Expanding ring, used for the catch flash. Drawn procedurally, never a sprite. */
+/**
+ * Ink splat burst for the catch flash — jagged spikes and flung droplets,
+ * drawn procedurally so it scales and never repeats exactly.
+ */
 export function drawPulseRing(
   ctx: CanvasRenderingContext2D,
   x: number,
   y: number,
-  t: number
+  t: number,
+  seed = 0
 ) {
-  const r = 18 + t * 150;
   const alpha = Math.max(0, 1 - t);
+  if (alpha <= 0) return;
+
+  const r = 18 + t * 130;
+  const spikes = 11;
+
   ctx.save();
+  ctx.translate(x, y);
+  ctx.globalAlpha = alpha * 0.9;
+
+  // Ragged star — alternating long spikes and short valleys.
   ctx.beginPath();
-  ctx.arc(x, y, r, 0, Math.PI * 2);
-  ctx.strokeStyle = `rgba(255, 246, 214, ${alpha * 0.9})`;
-  ctx.lineWidth = 8 * alpha + 1;
+  for (let i = 0; i <= spikes * 2; i++) {
+    const a = (i / (spikes * 2)) * Math.PI * 2;
+    // Deterministic per-flash jitter so each splat has its own shape.
+    const jitter = 0.72 + 0.4 * Math.abs(Math.sin(i * 12.9898 + seed * 78.233));
+    const rad = i % 2 === 0 ? r * jitter : r * 0.5 * jitter;
+    const px = Math.cos(a) * rad;
+    const py = Math.sin(a) * rad;
+    if (i === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+  ctx.strokeStyle = INK.splat;
+  ctx.lineWidth = 6 * alpha + 1.5;
+  ctx.lineJoin = "round";
   ctx.stroke();
+
+  // Droplets flung outward, decelerating.
+  ctx.fillStyle = INK.splat;
+  ctx.globalAlpha = alpha * 0.8;
+  for (let i = 0; i < 7; i++) {
+    const a = (i / 7) * Math.PI * 2 + seed;
+    const rad = r * (1.15 + 0.35 * Math.sin(i * 3.1 + seed));
+    ctx.beginPath();
+    ctx.arc(Math.cos(a) * rad, Math.sin(a) * rad, Math.max(0.5, 5 * alpha), 0, Math.PI * 2);
+    ctx.fill();
+  }
   ctx.restore();
 }
 
@@ -355,7 +495,7 @@ export function drawTension(ctx: CanvasRenderingContext2D, rope: Rope, amount: n
   if (amount <= 0.01) return;
   ctx.save();
   ctx.globalAlpha = amount * 0.8;
-  ctx.strokeStyle = "#fff1b8";
+  ctx.strokeStyle = INK.tension;
   ctx.lineWidth = 1.5;
   const nodes = rope.nodes;
   for (let i = 1; i < nodes.length; i++) {

@@ -1,8 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CONFIG } from "@/lib/config";
-import type { Game, GameSnapshotState } from "@/lib/game";
+import type { Capture, CatchEntry, Game, GameSnapshotState } from "@/lib/game";
 
 type Loading = "idle" | "loading" | "ready" | "failed";
 
@@ -10,10 +10,14 @@ const INITIAL: GameSnapshotState = {
   phase: "title",
   timeLeft: CONFIG.runDuration,
   caught: 0,
+  caughtRare: 0,
+  catches: [],
   usedMouth: false,
   showMouthHint: false,
+  gulps: 0,
+  submerged: false,
   inputMode: "face",
-  snapshot: null,
+  captures: [],
 };
 
 export default function GameShell() {
@@ -129,33 +133,48 @@ export default function GameShell() {
         {/* ---------------------------------------------------------- HUD */}
         {state.phase === "playing" && (
           <>
-            <div className="pointer-events-none absolute left-4 top-4 flex items-center gap-2 rounded-full bg-black/35 px-3 py-2 backdrop-blur-sm">
-              <CatchPips n={state.caught} />
+            {/* Timer and caught list both live in the visual-content zone:
+                informational, and tolerant of edge occlusion. */}
+            <div className="safe-visual">
+              <div className="pointer-events-none absolute left-0 top-0 h-[1.6cqw] w-[26cqw] overflow-hidden rounded-full bg-void/60">
+                <div
+                  className="h-full rounded-full bg-surface transition-[width] duration-200 ease-linear"
+                  style={{ width: `${timePct * 100}%` }}
+                />
+              </div>
+
+              <CaughtList catches={state.catches} />
             </div>
 
-            <div className="pointer-events-none absolute right-4 top-4 h-2 w-24 overflow-hidden rounded-full bg-black/35">
-              <div
-                className="h-full rounded-full bg-amber transition-[width] duration-200 ease-linear"
-                style={{ width: `${timePct * 100}%` }}
-              />
-            </div>
-
-            {state.showMouthHint && (
-              <div className="pointer-events-none absolute inset-x-0 bottom-24 flex justify-center px-8">
-                <p className="float rounded-full bg-black/55 px-5 py-3 text-center text-base font-semibold text-foam backdrop-blur-sm">
+            {/* Submerged outranks the mouth hint: while the player's face is
+                under the waterline nothing they do with their mouth can land a
+                fish, so telling them to open it would be actively misleading. */}
+            {state.submerged ? (
+              <div className="safe-core pointer-events-none flex items-end justify-center pb-2">
+                <p className="float rounded-full bg-splat px-5 py-3 text-center text-base font-bold text-foam">
                   {state.inputMode === "face"
-                    ? "Open your mouth to let the line out"
-                    : "Drag toward the bottom to let the line out"}
+                    ? "You're underwater — sit up to fish"
+                    : "Drag higher — the line is underwater"}
                 </p>
               </div>
+            ) : (
+              state.showMouthHint && (
+                <div className="safe-core pointer-events-none flex items-end justify-center pb-2">
+                  <p className="float rounded-full bg-void/75 px-5 py-3 text-center text-base font-semibold text-foam ring-1 ring-surface/30 backdrop-blur-sm">
+                    {state.inputMode === "face"
+                      ? "Open your mouth to let the line out"
+                      : "Drag toward the bottom to let the line out"}
+                  </p>
+                </div>
+              )
             )}
           </>
         )}
 
         {/* -------------------------------------------------------- TITLE */}
         {state.phase === "title" && (
-          <div className="absolute inset-0 grid place-items-center bg-deep/80 px-8 backdrop-blur-[2px]">
-            <div className="text-center">
+          <div className="absolute inset-0 grid place-items-center bg-void/85 px-8 backdrop-blur-[3px]">
+            <div className="w-full max-w-[66cqw] text-center">
               <h1 className="text-4xl font-extrabold tracking-tight text-foam">
                 Nose Fisher
               </h1>
@@ -163,20 +182,24 @@ export default function GameShell() {
                 Move your nose to steer the line.
                 <br />
                 Open your mouth to sink the hook.
+                <br />
+                Snap your head up to throw the fish —
+                <br />
+                then catch it in your mouth.
               </p>
 
               <div className="mt-8">
                 {loading === "loading" && (
                   <div className="flex flex-col items-center gap-3">
                     <div className="h-1.5 w-40 overflow-hidden rounded-full bg-foam/15">
-                      <div className="h-full w-1/3 animate-[floatY_1.2s_ease-in-out_infinite] rounded-full bg-teal" />
+                      <div className="h-full w-1/3 animate-[floatY_1.2s_ease-in-out_infinite] rounded-full bg-surface" />
                     </div>
                     <p className="text-xs text-foam/50">Loading face tracking…</p>
                   </div>
                 )}
 
                 {loading === "failed" && (
-                  <p className="mb-4 text-xs text-amber/80">
+                  <p className="mb-4 text-xs text-gold/85">
                     Face tracking unavailable — you can play by dragging instead.
                   </p>
                 )}
@@ -184,7 +207,7 @@ export default function GameShell() {
                 {(loading === "ready" || loading === "failed") && (
                   <button
                     onClick={handleStart}
-                    className="rounded-full bg-coral px-10 py-4 text-lg font-bold text-deep shadow-lg active:scale-95"
+                    className="rounded-full bg-splat px-10 py-4 text-lg font-black uppercase tracking-wide text-foam shadow-[0_6px_0_#a3125f] active:translate-y-1 active:shadow-[0_2px_0_#a3125f]"
                   >
                     Start fishing
                   </button>
@@ -199,27 +222,37 @@ export default function GameShell() {
         )}
 
         {/* ------------------------------------------------------- RESULT */}
+        {/* No opaque scrim: the final frame stays visible underneath and the
+            prints scatter across it, so this reads as photos tossed onto the
+            scene rather than a separate screen. */}
         {state.phase === "result" && (
-          <div className="absolute inset-0 grid place-items-center bg-deep/85 px-6 backdrop-blur-[2px]">
-            <div className="w-full max-w-[300px] text-center">
-              <ResultFrame src={state.snapshot} />
-
-              <p className="mt-5 text-3xl font-extrabold text-foam">
-                {state.caught} {state.caught === 1 ? "fish" : "fish"}
+          <div className="absolute inset-0 flex flex-col bg-void/45">
+            <div className="shrink-0 px-5 pt-5">
+              <p className="text-4xl font-black uppercase tracking-tight text-foam drop-shadow-[0_2px_0_rgba(18,10,32,0.6)]">
+                Score
               </p>
-              <p className="mt-1 text-sm text-foam/60">
-                {state.caught === 0 ? "The one that got away." : "Nice haul."}
+              <p className="mt-1 text-sm font-bold text-foam drop-shadow">
+                {state.caught} fish
+                {state.caughtRare > 0 && (
+                  <span className="text-gold"> · {state.caughtRare} rare</span>
+                )}
+                {state.gulps > 0 && (
+                  <span className="text-splat"> · {state.gulps} eaten</span>
+                )}
               </p>
+            </div>
 
+            <PhotoScatter captures={state.captures} />
+
+            <div className="shrink-0 px-6 pb-7 pt-2 text-center">
               <button
                 onClick={handleReplay}
-                className="mt-7 rounded-full bg-coral px-9 py-3.5 text-base font-bold text-deep shadow-lg active:scale-95"
+                className="rounded-xl bg-splat px-10 py-3.5 text-base font-black uppercase tracking-wide text-foam shadow-[0_6px_0_#a3125f] active:translate-y-1 active:shadow-[0_2px_0_#a3125f]"
               >
-                Go again
+                Go Again
               </button>
-
               {cameraDenied && (
-                <p className="mt-4 text-[11px] text-foam/40">
+                <p className="mt-3 text-[11px] text-foam/60">
                   Playing without a camera — drag to fish.
                 </p>
               )}
@@ -239,65 +272,227 @@ export default function GameShell() {
   );
 }
 
-/** The catch counter. Deliberately pips, not a score. */
-function CatchPips({ n }: { n: number }) {
-  if (n === 0) {
-    return <span className="text-xs font-semibold text-foam/50">No catches yet</span>;
+/**
+ * The caught list — a vertical rail of every fish landed this run, newest at
+ * the top, down the right edge of the visual-content safe zone.
+ *
+ * Sizing follows the TikTok effect spec's own list frame: 68x44 glyphs on a
+ * 54px pitch, against the 390x694 effect canvas. Expressed in cqw so the rail
+ * scales with the stage instead of the viewport.
+ *
+ * Rarity is the only thing the fill encodes: magenta common, gold rare. It is
+ * a list, not a score — no number is attached to an entry.
+ */
+function CaughtList({ catches }: { catches: CatchEntry[] }) {
+  const VISIBLE = 6;
+  // Newest first. When the run outruns the rail the oldest fall off, so the
+  // most recent catch is never the one pushed out of view.
+  const shown = [...catches].reverse().slice(0, VISIBLE);
+  const overflow = catches.length - shown.length;
+
+  // Each id chomps exactly once. Without this the animation would replay on
+  // every re-render for as long as the entry stayed on the rail.
+  const chomped = useRef<Set<number>>(new Set());
+  const toChomp = new Set<number>();
+  for (const c of catches) {
+    if (c.gulped && !chomped.current.has(c.id)) {
+      toChomp.add(c.id);
+      chomped.current.add(c.id);
+    }
   }
-  if (n <= 6) {
-    return (
-      <div className="flex items-center gap-1">
-        {Array.from({ length: n }).map((_, i) => (
-          <FishPip key={i} />
-        ))}
-      </div>
-    );
-  }
+
   return (
-    <div className="flex items-center gap-1.5">
-      <FishPip />
-      <span className="text-sm font-bold text-foam">×{n}</span>
+    <div className="absolute right-0 top-0 flex flex-col items-end gap-[2.4cqw]">
+      {shown.map((c, i) => (
+        <CaughtSlot
+          key={c.id}
+          rarity={c.rarity}
+          gulped={c.gulped}
+          chomping={toChomp.has(c.id)}
+          // Only the newest entry slides in; re-animating the whole column on
+          // every catch reads as a glitch rather than an addition.
+          fresh={i === 0 && !c.gulped}
+        />
+      ))}
+      {overflow > 0 && (
+        <span className="text-[2.8cqw] font-bold text-foam/70 drop-shadow">+{overflow}</span>
+      )}
     </div>
   );
 }
 
-function FishPip() {
+function CaughtSlot({
+  rarity,
+  gulped,
+  chomping,
+  fresh,
+}: {
+  rarity: CatchEntry["rarity"];
+  gulped: boolean;
+  chomping: boolean;
+  fresh: boolean;
+}) {
+  const rare = rarity === "rare";
   return (
-    <svg width="16" height="12" viewBox="0 0 16 12" aria-hidden>
+    <div
+      // 17.4cqw ≈ the spec's 68px glyph on a 390px canvas. No frame — the
+      // glyph carries its own outline, and a chip would fight the camera feed.
+      className={`relative grid h-[11.3cqw] w-[17.4cqw] place-items-center ${
+        fresh ? "animate-[slotIn_260ms_cubic-bezier(0.2,1.4,0.4,1)]" : ""
+      }`}
+    >
+      {/* Mouth first in the DOM so it renders BEHIND the fish — the fish sits
+          inside the open lips rather than having a jaw stuck to its side. */}
+      {gulped && (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src="/assets/mouth.webp"
+          alt=""
+          aria-hidden
+          className="pointer-events-none absolute left-1/2 top-1/2 w-[14cqw] -translate-x-1/2 -translate-y-1/2"
+          style={
+            chomping
+              ? { animation: "chompBite 640ms cubic-bezier(0.3,1.2,0.4,1) forwards" }
+              : undefined
+          }
+        />
+      )}
+
+      <div
+        className="relative grid h-full w-full place-items-center"
+        style={
+          chomping
+            ? { animation: "chompFish 640ms cubic-bezier(0.3,1.2,0.4,1) forwards" }
+            : gulped
+              ? { transform: "scale(0.6)" }
+              : undefined
+        }
+      >
+        <FishPip rare={rare} />
+      </div>
+    </div>
+  );
+}
+
+function FishPip({ rare = false }: { rare?: boolean }) {
+  const fill = rare ? "#ffd23d" : "#ff2d9b";
+  return (
+    <svg viewBox="0 0 16 12" className="h-full w-full drop-shadow-[0_1px_2px_rgba(0,0,0,0.55)]" aria-hidden>
+      {/* Angular, to match the ink sprites rather than a rounded icon set. */}
       <path
-        d="M10 6c0 2.2-2 4-4.5 4S1 8.2 1 6s2-4 4.5-4S10 3.8 10 6Z"
-        fill="#ff6b4a"
-        stroke="#1a1410"
-        strokeWidth="1.2"
-      />
-      <path
-        d="M10 6l4.5-2.6v5.2L10 6Z"
-        fill="#ff6b4a"
-        stroke="#1a1410"
+        d="M1 6l3-3.4 5.2-1L11 6l-1.8 4.4-5.2-1L1 6Z"
+        fill={fill}
+        stroke="#120a20"
         strokeWidth="1.2"
         strokeLinejoin="round"
       />
-      <circle cx="4.4" cy="5.2" r="0.9" fill="#1a1410" />
+      <path
+        d="M11 6l4.2-2.8-.6 5.6L11 6Z"
+        fill={fill}
+        stroke="#120a20"
+        strokeWidth="1.2"
+        strokeLinejoin="round"
+      />
+      <circle cx="4.6" cy="5.4" r="1" fill="#120a20" />
     </svg>
   );
 }
 
-/** Result card frame, drawn with CSS rather than a generated sprite. */
-function ResultFrame({ src }: { src: string | null }) {
+const KIND_LABEL: Record<Capture["kind"], string> = {
+  catch: "Caught",
+  gulp: "Ate it",
+  mouth: "Wide open",
+  tug: "Head tug",
+};
+
+/**
+ * Deterministic per-photo jitter.
+ *
+ * Seeded off the capture id rather than Math.random, so a print does not leap
+ * to a new angle on every React re-render — the pile has to sit still.
+ */
+function jitter(id: number) {
+  const wobble = (salt: number) => {
+    const v = Math.sin(id * 12.9898 + salt) * 43758.5453;
+    return v - Math.floor(v); // 0..1
+  };
+  return {
+    rotate: (wobble(1) - 0.5) * 22,
+    dx: (wobble(2) - 0.5) * 18,
+    dy: (wobble(3) - 0.5) * 14,
+  };
+}
+
+/**
+ * The run's photos, tossed across the final frame as a pile of prints.
+ * Tapping one lifts it rather than opening a viewer, so browsing never leaves
+ * the card.
+ */
+function PhotoScatter({ captures }: { captures: Capture[] }) {
+  // Catches and gulps lead. This is a wrapping layout, so order IS position —
+  // sorting them last would bury the earned shots beneath everything else.
+  const ordered = useMemo(() => {
+    const rank = (c: Capture) =>
+      c.kind === "gulp" ? 0 : c.kind === "catch" ? 1 : 2;
+    return captures.slice().sort((a, b) => rank(a) - rank(b) || a.id - b.id);
+  }, [captures]);
+
+  const [raisedId, setRaisedId] = useState<number | null>(null);
+
+  if (ordered.length === 0) {
+    return (
+      <div className="flex flex-1 items-center justify-center px-10">
+        <p className="rounded-2xl bg-void/80 px-5 py-4 text-center text-xs text-foam/80">
+          No photos this run — get the hook up by your face and pull a face.
+        </p>
+      </div>
+    );
+  }
+
   return (
-    <div className="relative mx-auto aspect-[9/16] w-full max-h-[46vh] overflow-hidden rounded-2xl border-[6px] border-foam bg-black/40 shadow-2xl">
-      {src ? (
-        // A data URL, so next/image would only get in the way here.
-        // eslint-disable-next-line @next/next/no-img-element
-        <img src={src} alt="Your catch" className="h-full w-full object-cover" />
-      ) : (
-        <div className="grid h-full w-full place-items-center">
-          <p className="px-6 text-center text-xs text-foam/50">
-            No snapshot this run — hook a fish and fight it to get one.
-          </p>
-        </div>
-      )}
-      <div className="pointer-events-none absolute inset-0 rounded-xl ring-2 ring-inset ring-teal/40" />
+    <div className="flex-1 overflow-y-auto px-3 py-2">
+      <div className="flex flex-wrap justify-center">
+        {ordered.map((c, i) => {
+          const j = jitter(c.id);
+          const raised = c.id === raisedId;
+          const earned = c.kind === "catch" || c.kind === "gulp";
+          return (
+            <button
+              key={c.id}
+              onClick={() => setRaisedId(raised ? null : c.id)}
+              aria-label={KIND_LABEL[c.kind]}
+              // Negative margins are what make the prints overlap into a pile
+              // rather than sit in a tidy grid.
+              className="relative -mx-2 -my-1 w-[43%] shrink-0 transition-transform active:scale-95"
+              style={{
+                transform: `rotate(${j.rotate}deg) translate(${j.dx}px, ${j.dy}px) scale(${raised ? 1.08 : 1})`,
+                // Earned shots also sit on top where prints overlap, so a
+                // neighbour never clips the one photo that mattered.
+                zIndex: raised ? 9999 : (earned ? 1000 : 0) + i,
+              }}
+            >
+              <div className="rounded-[3px] bg-foam p-1.5 pb-5 shadow-xl">
+                <div className="relative aspect-[9/13] w-full overflow-hidden bg-void">
+                  {/* Data URLs, so next/image would only get in the way. */}
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={c.src}
+                    alt={KIND_LABEL[c.kind]}
+                    className="h-full w-full object-cover"
+                  />
+                </div>
+                <span className="absolute inset-x-0 bottom-1 text-center text-[9px] font-bold uppercase tracking-wide text-void/70">
+                  {c.kind === "gulp"
+                    ? "😋 Ate it"
+                    : c.kind === "catch"
+                      ? "🐟 Caught"
+                      : KIND_LABEL[c.kind]}
+                </span>
+              </div>
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }

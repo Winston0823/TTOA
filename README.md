@@ -2,7 +2,7 @@
 
 A proof-of-concept vertical web game for validating **game feel on a real phone**. You steer a fishing line with your nose and pay out rope by opening your mouth.
 
-This is a feel prototype, not a complete game. The pipeline is end-to-end — camera → face landmarks → rope physics → catch loop → snapshot → result — but there is exactly one fish type and one 30-second run.
+This is a feel prototype, not a complete game. The pipeline is end-to-end — camera → face landmarks → rope physics → catch loop → snapshot → result — but there are two fish tiers and one 30-second run.
 
 ## Stack
 
@@ -88,6 +88,9 @@ Start here when tuning:
 | Rope feels like spaghetti | `rope.swingDamping` (raise toward 0.98) |
 | Mouth flickers open/closed | `mouth.rawClosed` / `mouth.rawOpen` band |
 | Bites too hard to land | `fish.catchWindow`, `fish.catchRadius` |
+| Fish wash out against the water | `water.fishRestoreAlpha` |
+| Fish look stiff / rubbery | `deform.swim.tailAmp`, `deform.stiffness` |
+| Rare fish too common / rare | `fish.rareChance` |
 
 ## Hardening
 
@@ -99,18 +102,55 @@ Start here when tuning:
 - **Safe-area insets** are respected via `env(safe-area-inset-*)` and `viewportFit: "cover"`.
 - **Portrait lock via CSS**, with a rotate-back overlay in landscape.
 
-## Assets
+## Art direction
 
-Fish (3 colour variants) and the hook were generated with Higgsfield from a single shared style descriptor and live in `public/assets` as WebP. Every sprite has a **procedural Canvas2D fallback** in `lib/render.ts` that draws in the same style, so a failed image load degrades rather than breaking.
+Splatoon-style ink: bold angular shapes, thick irregular spray-paint outlines, flat neon fills on a deep purple-navy water. Every colour in the game comes from `CONFIG.ink` in `lib/config.ts` — nothing is hard-coded in the renderer.
 
-All VFX — pulse rings, rope, tension, catch flash, water surface, caustics — are drawn procedurally. None of them are sprites.
+Two fish tiers, generated with Higgsfield from one shared style descriptor and stored in `public/assets` as WebP:
+
+| tier | sprite | reads as |
+| --- | --- | --- |
+| common | magenta, plain | small, fast, shallow |
+| rare | gold with a warm stripe | 1.34× bigger, slower, spawns deeper, fights ~45% harder |
+
+**Rarity is signalled procedurally**, not baked into the sprite — a pulsing gold ring plus orbiting ink flecks drawn in canvas. An earlier rare sprite carried its own sparks and back-spikes; at 96px the detail mushed and the cyan sat too close to the water. Procedural glow scales at any size and costs nothing.
+
+Every sprite has a **procedural Canvas2D fallback** in `lib/render.ts` drawn in the same ink style, so a failed image load degrades rather than breaking.
+
+All VFX — ink splat bursts, rope, tension shimmer, rarity glow, water surface, caustics — are drawn procedurally. None of them are sprites.
+
+### Animation
+
+Fish are deformed at runtime, not played from a sprite sheet. The sprite is drawn as `CONFIG.deform.slices` vertical strips, each offset by a travelling sine wave whose amplitude ramps from zero at the head to maximum at the tail:
+
+```
+u    = slice index / (slices - 1)      # 0 at head, 1 at tail
+ramp = u ** stiffness
+dy   = tailAmp * h * ramp * sin(2π(t·hz - u/waveLength))
+     + archAmp * h * sin(πu) * sin(2π·t·hz)     # body curl, hooked only
+```
+
+Swim and hooked are the same function with different constants — hooked runs at roughly double the rate with a body curl and a much larger whole-body roll. Because it is continuous rather than a fixed frame count, it never looks stepped and every value is tunable from `config.ts`.
+
+Static sprite sheets baked from this exact math (8-frame swim, 10-frame hooked, plus a JSON atlas) are available if another engine needs them, but the game does not load them.
+
+## Performance
+
+**Never put `ctx.filter = "blur(...)"` in the frame loop.** An earlier build softened submerged fish with a canvas blur; at this canvas size it cost more than everything else combined and pinned the game at **4.5 FPS**. Removing it took the same scene to **60 FPS** — a 13× swing from one line. Depth separation now comes from the translucent water layer plus an alpha pass, which looks equivalent and is effectively free.
+
+Two other things worth knowing if you add to the render loop:
+
+- The waterline is sampled once per frame and the points reused for the fill and both strokes. It used to be recomputed three times, sine and every active bump included.
+- Deformation is `slices × live fish` `drawImage` calls per frame. At 10 slices and 5 fish that is 50, twice over (once under the water layer, once above it for contrast). Raising `deform.slices` multiplies that.
+
+Measured in headless Chromium under software rendering, so it is a pessimistic floor — a real phone with GPU-accelerated canvas has more headroom.
 
 ## Known limits of this POC
 
-- One fish type, one run length, no difficulty curve.
+- Two fish tiers, one run length, no difficulty curve.
 - MediaPipe WASM and the landmark model load from CDN (jsDelivr / Google Storage). Offline play falls back to touch mode.
 - The snapshot uses `toDataURL`, so a cross-origin video source would taint the canvas. Same-origin camera capture is fine.
-- Verified in headless Chromium end-to-end (title → play → result, touch path). **The face-tracking path needs a pass on a real iOS device.**
+- Verified in headless Chromium end-to-end (title → play → result, 3 catches, 60 FPS, no console errors) on the touch path. **The face-tracking path needs a pass on a real iOS device.**
 
 ## Layout notes
 

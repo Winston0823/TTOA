@@ -63,6 +63,21 @@ export class Rope {
   }
 
   /**
+   * Anchor velocity in units/sec — i.e. how fast the player's head is moving.
+   *
+   * `step` stashes the previous anchor position in px/py before pinning the new
+   * one, so this is exactly the frame's nose displacement. Prefer this over
+   * `hookVelocity` for reading player INTENT: the hook's motion is dominated by
+   * rope payout and by whatever the fish is doing, neither of which the player
+   * is expressing. The nose only moves because the player moved it.
+   */
+  anchorVelocity(dt: number): { vx: number; vy: number } {
+    const a = this.anchor;
+    if (dt <= 0) return { vx: 0, vy: 0 };
+    return { vx: (a.x - a.px) / dt, vy: (a.y - a.py) / dt };
+  }
+
+  /**
    * THE force entry point. Currents, fish struggle, and any future hazard all
    * route through here. `index` selects the node; use `hookIndex` for the hook.
    */

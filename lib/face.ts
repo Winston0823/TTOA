@@ -24,6 +24,14 @@ export interface FaceSample {
   /** Mirrored, normalized 0..1 nose position. */
   noseX: number;
   noseY: number;
+  /**
+   * Mirrored, normalized 0..1 centre of the mouth opening.
+   * Tracked separately from the nose because a falling fish has to be caught in
+   * the mouth specifically, and the gap between nose and lips is most of a
+   * catch radius — approximating one from the other would miss visibly.
+   */
+  mouthX: number;
+  mouthY: number;
   /** Continuous 0..1 mouth aperture. Never a binary threshold. */
   mouth: number;
   ok: boolean;
@@ -50,8 +58,17 @@ export class FaceTracker {
   private lastVideoTime = -1;
   private noseXEma = new Ema(CONFIG.noseEma);
   private noseYEma = new Ema(CONFIG.noseEma);
+  private mouthXEma = new Ema(CONFIG.noseEma);
+  private mouthYEma = new Ema(CONFIG.noseEma);
   private mouthEma = new Ema(CONFIG.mouthEma);
-  private lastSample: FaceSample = { noseX: 0.5, noseY: 0.5, mouth: 0, ok: false };
+  private lastSample: FaceSample = {
+    noseX: 0.5,
+    noseY: 0.5,
+    mouthX: 0.5,
+    mouthY: 0.56,
+    mouth: 0,
+    ok: false,
+  };
 
   ready = false;
 
@@ -75,6 +92,8 @@ export class FaceTracker {
   reset() {
     this.noseXEma.reset();
     this.noseYEma.reset();
+    this.mouthXEma.reset();
+    this.mouthYEma.reset();
     this.mouthEma.reset();
     this.lastVideoTime = -1;
   }
@@ -129,6 +148,8 @@ export class FaceTracker {
     this.lastSample = {
       noseX: this.noseXEma.push(rawX),
       noseY: this.noseYEma.push(rawY),
+      mouthX: this.mouthXEma.push(1 - (upper.x + lower.x) / 2),
+      mouthY: this.mouthYEma.push((upper.y + lower.y) / 2),
       mouth: this.mouthEma.push(rawMouth),
       ok: true,
     };
@@ -144,22 +165,41 @@ export class FaceTracker {
 }
 
 /**
- * Maps a raw smoothed nose Y into a 0..1 anchor position.
- * The raw signal only spans a narrow band because players barely move their
- * head; we stretch that band across the full range with an ease curve so the
- * bottom of the water is reachable without leaning out of frame.
+ * Projects a normalized, already-mirrored face landmark into canvas space.
+ *
+ * This MUST stay in lockstep with `drawCamera`, which paints the feed
+ * cover-style (scale to the larger axis, centre the overflow) and mirrored.
+ * Because the sample is stored pre-mirrored, the mirror cancels out and the X
+ * mapping ends up identical in form to the Y one — see the note below.
+ *
+ * Any amplification applied here would visibly detach the rope from the face,
+ * so there is deliberately none. Reach into the water comes from rope payout.
  */
-export function amplifyNoseY(raw: number): number {
-  const { inputMin, inputMax, curve, gain } = CONFIG.noseY;
-  const t = (raw - inputMin) / (inputMax - inputMin);
-  const clamped = Math.max(0, Math.min(1, t));
-  return Math.max(0, Math.min(1, Math.pow(clamped, curve) * gain));
-}
+export function landmarkToCanvas(
+  mirroredX: number,
+  y: number,
+  videoW: number,
+  videoH: number,
+  canvasW: number,
+  canvasH: number
+): { x: number; y: number } {
+  // Degenerate dimensions (video not ready) — fall back to a centred guess
+  // rather than emitting NaN into the physics.
+  if (!videoW || !videoH) {
+    return { x: mirroredX * canvasW, y: y * canvasH };
+  }
 
-/** Amplifies nose X about the center of the frame. */
-export function amplifyNoseX(raw: number): number {
-  const centered = (raw - 0.5) * CONFIG.noseXGain + 0.5;
-  return Math.max(0, Math.min(1, centered));
+  const scale = Math.max(canvasW / videoW, canvasH / videoH);
+  const dw = videoW * scale;
+  const dh = videoH * scale;
+
+  // drawCamera places the unmirrored image at (canvasW - dw) / 2 and then
+  // reflects the whole canvas. Reflecting that offset gives back the same
+  // value, so the mirrored point lands at the plain cover-fit offset.
+  return {
+    x: (canvasW - dw) / 2 + mirroredX * dw,
+    y: (canvasH - dh) / 2 + y * dh,
+  };
 }
 
 /** Maps the raw aperture ratio to a continuous 0..1 payout value. */

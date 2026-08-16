@@ -11,7 +11,7 @@ body {
   height: 100%;
   margin: 0;
   padding: 0;
-  background: #06181c;
+  background: #0d0722;
   overscroll-behavior: none;
   /* Stops iOS from bouncing the whole page while the player drags. */
   touch-action: none;
@@ -34,14 +34,34 @@ body {
   padding-right: env(safe-area-inset-right);
 }
 
+/*
+ * TikTok effect safe zones, from the "Effect Safezone" spec.
+ * All values are expressed against the 390x694 effect canvas the spec targets,
+ * converted to percentages so they hold at any stage size.
+ *
+ *   clip area      19px each side  — may be cropped on some devices
+ *   visual content x 19..371, y 82..544  — game art, edges may be occluded
+ *   core zone      x 65..325, y 82..533  — must be fully visible AND tappable
+ */
 .stage-inner {
+  --clip-x: 4.872%;
+  --core-x: 16.667%;
+  --core-top: 11.816%;
+  --core-bottom: 23.199%;
+  --vis-x: 4.872%;
+  --vis-top: 11.816%;
+  --vis-bottom: 21.47%;
+
   position: relative;
   aspect-ratio: 9 / 16;
   height: 100%;
   max-width: 100%;
   overflow: hidden;
   border-radius: 18px;
-  background: #06181c;
+  background: #0d0722;
+  /* cqw units below resolve against the stage, not the viewport, so the HUD
+     keeps the spec's proportions whatever size the stage ends up. */
+  container-type: inline-size;
 }
 
 @supports not (aspect-ratio: 9 / 16) {
@@ -83,7 +103,7 @@ body {
     z-index: 50;
     display: grid;
     place-items: center;
-    background: #06181c;
+    background: #0d0722;
     text-align: center;
   }
 }
@@ -100,4 +120,62 @@ body {
 
 .float {
   animation: floatY 2.6s ease-in-out infinite;
+}
+
+/* New caught-list entries pop in from the right with a slight overshoot, so a
+   catch registers peripherally while the player is looking at the water. */
+@keyframes slotIn {
+  0% {
+    opacity: 0;
+    transform: translateX(18px) scale(0.8);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+/* Interactive controls, CTAs and key copy. Nothing here may be clipped. */
+.safe-core {
+  position: absolute;
+  left: var(--core-x);
+  right: var(--core-x);
+  top: var(--core-top);
+  bottom: var(--core-bottom);
+  pointer-events: none;
+}
+
+/* Game art and informational overlays. Edge occlusion is tolerable here. */
+.safe-visual {
+  position: absolute;
+  left: var(--vis-x);
+  right: var(--vis-x);
+  top: var(--vis-top);
+  bottom: var(--vis-bottom);
+  pointer-events: none;
+}
+
+.safe-core > *,
+.safe-visual > * {
+  pointer-events: auto;
+}
+
+/* The mouth is head-on and sits BEHIND the fish, so the bite reads as lips
+   closing over it rather than a jaw swinging in from the side. It scales up
+   from behind, snaps shut on Y, then settles open. No scaleX — the sprite is
+   symmetrical and has no facing. */
+@keyframes chompBite {
+  0% { opacity: 0; transform: scale(0.45); }
+  22% { opacity: 1; transform: scale(1.18); }
+  46% { opacity: 1; transform: scale(1.18); }
+  62% { opacity: 1; transform: scale(1.1) scaleY(0.34); }
+  80% { opacity: 1; transform: scale(1) scaleY(1.06); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+/* Fish shrinks into the mouth and stays there — it got eaten. */
+@keyframes chompFish {
+  0%, 40% { transform: scale(1); }
+  62% { transform: scale(0.5); }
+  100% { transform: scale(0.6); }
 }
