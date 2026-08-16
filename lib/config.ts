@@ -384,8 +384,12 @@ export const CONFIG = {
 
   // ---------------------------------------------------------------- water
   water: {
-    /** Fraction of the screen height occupied by water, measured from bottom. */
-    coverage: 0.5,
+    /**
+     * Fraction of the screen height occupied by water, measured from bottom.
+     * Four ninths leaves more of the player's face above the line, which is
+     * both the thing worth photographing and the space the throw happens in.
+     */
+    coverage: 4 / 9,
     /** Alpha of the translucent water layer drawn over the camera feed. */
     alpha: 0.75,
     /** Base amplitude of the undulating waterline, in canvas units. */
