@@ -179,6 +179,16 @@ export const CONFIG = {
      * A hooked fish is NOT earned on a timer. It is earned by hauling it to the
      * surface and throwing it clear — see the `fling` block below.
      */
+    /**
+     * Once a fish is on, the line reels itself in at this rate (payout units
+     * per second) whether or not the mouth is shut.
+     *
+     * It acts as a descending CEILING on payout rather than a forced retract,
+     * so the player can still hold the line short — they just cannot pay more
+     * out while a fish is fighting. Without it, hauling up from a deep hook ate
+     * most of the escape timer before a throw was even possible.
+     */
+    autoReelRate: 0.5,
     /** Seconds the fish fights before it throws the hook and escapes. */
     escapeAfter: 8.0,
     /** Steady downward pull a hooked fish adds at the hook. */
@@ -198,11 +208,21 @@ export const CONFIG = {
   fling: {
     /**
      * Upward head speed, in canvas units/sec, needed to throw the fish.
-     * Sits in the gap between a lift and a throw: simulated against the real
-     * rope, a leisurely half-second head-raise peaks around 740 and a genuine
-     * snap clears 1000. Lower this if real players find the throw stubborn.
+     *
+     * Simulation put a half-second head-raise at ~740 and a sharp snap over
+     * 1000, so 800 sat neatly between "lift" and "throw" on paper — but it
+     * played stiff. Two reasons the real signal comes in under the model: the
+     * nose EMA (alpha 0.35) shaves the peak off any fast movement before it
+     * ever reaches here, and a player at a laptop moves their head far less
+     * than the idealised curve assumes.
+     *
+     * Measured with the EMA modelled, smoothing roughly HALVES the peak: a
+     * raise that peaks at 914 raw arrives here as 485. So 800 was really
+     * demanding a raw peak over 1500 — a violent movement. At 450 a quick
+     * 4% nod or a moderate 8% raise both land, while ordinary aiming (a few
+     * percent over half a second, ~250-370) stays well clear.
      */
-    speed: 800,
+    speed: 450,
     /**
      * How much the upward motion must dominate the sideways motion.
      * 1.0 admits anything within 45 degrees of straight up.

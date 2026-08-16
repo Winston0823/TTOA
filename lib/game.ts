@@ -114,6 +114,11 @@ export class Game {
 
   private hookedFish: Fish | null = null;
   private struggleTime = 0;
+  /**
+   * Descending ceiling on payout while a fish is hooked — the line reeling
+   * itself in. Set to the payout at the moment of the hook, then walked down.
+   */
+  private autoReel = 1;
   /** Fish caught in the mouth on the way down. */
   private gulps = 0;
   /**
@@ -397,7 +402,16 @@ export class Game {
     }
 
     // ---- rope ------------------------------------------------------------
-    this.rope.updatePayout(payout, dt);
+    // A hooked fish reels itself in. `autoReel` is a ceiling, not a forced
+    // retract: the player can still hold the line shorter than it, they just
+    // cannot pay more out mid-fight. This is what makes the throw reachable
+    // before the escape timer runs down.
+    let ropeTarget = payout;
+    if (this.hookedFish) {
+      this.autoReel = Math.max(0, this.autoReel - CONFIG.fish.autoReelRate * dt);
+      ropeTarget = Math.min(payout, this.autoReel);
+    }
+    this.rope.updatePayout(ropeTarget, dt);
 
     // Everything that pushes the rope goes through the one force system.
     const cf = currentForce(this.elapsed);
@@ -497,6 +511,9 @@ export class Game {
     f.stateTime = 0;
     this.hookedFish = f;
     this.struggleTime = 0;
+    // Start the reel from wherever the line currently is, so a shallow hook
+    // does not get a free head start on a deep one.
+    this.autoReel = this.rope.payout;
     this.flashes.push({ x: hx, y: hy, t: 0, seed: f.id * 0.618 });
     this.audio.catchSting();
     this.addBump(hx, 0.5);
