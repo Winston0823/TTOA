@@ -245,12 +245,16 @@ export default function GameShell() {
                 against the container's WIDTH, so `pb-[23.2%]` on a 9:16 stage
                 buys only 13% of the height and quietly drops the CTAs below the
                 zone. Percentage `top`/`bottom` resolve against height. */}
-            {/* `grid-rows-[auto_minmax(0,1fr)_auto]`, not a flex column: the
-                middle row is the only one allowed to absorb slack, so the
-                header and the CTA always keep their space. Under flex the
-                carousel could out-grow its share on a short stage and push the
-                button out of view — which is what made it flicker. */}
-            <div className="absolute inset-x-[var(--core-x)] top-[var(--core-top)] bottom-[var(--core-bottom)] grid grid-rows-[auto_minmax(0,1fr)_auto]">
+            {/* Rows are sized to CONTENT and the group is centred, rather than
+                stretched across the zone. Stretching pinned the title to the
+                very top and the CTA to the very bottom, which read as three
+                scattered elements instead of one card.
+                The middle row still needs a definite height for the print (see
+                PhotoCarousel), so the print row carries its own `cqw` height
+                rather than absorbing slack — that also keeps the button inside
+                the core zone on a short stage, which is what the old `1fr`
+                was protecting against. */}
+            <div className="absolute inset-x-[var(--core-x)] top-[var(--core-top)] bottom-[var(--core-bottom)] grid grid-rows-[auto_auto_auto] content-center">
             <header className="pb-[2.4cqw] text-center">
               <h2 className="ink-title text-[9.5cqw] leading-[0.92]">{archetype.title}</h2>
               <p className="ink-tally mt-[1.6cqw] text-[3.2cqw]">{tallyLine(state)}</p>
@@ -573,13 +577,13 @@ function PhotoCarousel({
   }
 
   return (
-    <div className="grid min-h-0 grid-rows-[minmax(0,1fr)_auto]">
+    <div className="grid grid-rows-[auto_auto]">
       {/* `isolate` scopes the per-print z-indexes to this row. Without it a
           positioned print with `z-index: 2` paints over the dots and the CTA —
           which sit later in the DOM but are unpositioned, so they lose the
           stacking contest no matter where they are on screen. */}
       <div
-        className="relative isolate min-h-0 touch-none"
+        className="relative isolate h-[68cqw] max-h-full touch-none"
         onPointerDown={onDown}
         onPointerUp={onUp}
         onPointerCancel={() => (dragX.current = null)}
