@@ -1,4 +1,3 @@
-import { CONFIG } from "./config";
 import type { GameSnapshotState } from "./game";
 
 /**
@@ -17,8 +16,6 @@ import type { GameSnapshotState } from "./game";
 export interface Archetype {
   /** Short, uppercase, stamped across the result card. */
   title: string;
-  /** One roastable line under it. */
-  line: string;
 }
 
 export function archetypeFor(s: {
@@ -28,52 +25,14 @@ export function archetypeFor(s: {
 }): Archetype {
   const { caught, caughtRare, gulps } = s;
 
-  if (caught === 0) {
-    return {
-      title: "Skunked",
-      line: "Zero fish. You just pulled faces at the sea.",
-    };
-  }
+  if (caught === 0) return { title: "Skunked" };
 
-  if (gulps >= caught) {
-    return {
-      title: "Human Pelican",
-      line: "Ate every fish you caught. No survivors.",
-    };
-  }
-
-  if (caught >= 5) {
-    return {
-      title: "Commercial Trawler",
-      line: `${caught} fish in ${CONFIG.runDuration} seconds. Leave some for everyone else.`,
-    };
-  }
-
-  if (caughtRare === caught) {
-    return {
-      title: "Gold Digger",
-      line: "Only touched the gold ones. Nothing but the good stuff.",
-    };
-  }
-
-  if (gulps > 0) {
-    return {
-      title: "Raw Bar",
-      line: `${gulps} caught in your mouth, straight out of the air.`,
-    };
-  }
-
-  if (caughtRare > 0) {
-    return {
-      title: "Lucky Nose",
-      line: "Pulled a rare one up. That doesn't happen to everyone.",
-    };
-  }
-
-  return {
-    title: "Weekend Angler",
-    line: `${caught} fish, no drama. Perfectly respectable.`,
-  };
+  if (gulps >= caught) return { title: "Human Pelican" };
+  if (caught >= 5) return { title: "Commercial Trawler" };
+  if (caughtRare === caught) return { title: "Gold Digger" };
+  if (gulps > 0) return { title: "Raw Bar" };
+  if (caughtRare > 0) return { title: "Lucky Nose" };
+  return { title: "Weekend Angler" };
 }
 
 /** `3 fish · 1 rare · 2 eaten`, skipping the parts that are zero. */

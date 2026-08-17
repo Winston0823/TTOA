@@ -193,23 +193,3 @@ export async function sharePolaroid(spec: PolaroidSpec): Promise<ShareResult> {
     return "failed";
   }
 }
-
-/** The remix CTA: pass the effect on rather than the picture. */
-export async function shareChallenge(archetype: string): Promise<ShareResult> {
-  const url = typeof window === "undefined" ? "" : window.location.href;
-  const text = `I got ${archetype} on Nose Fisher. Beat it.`;
-  try {
-    if (navigator.share) {
-      await navigator.share({ title: "Nose Fisher", text, url });
-      return "shared";
-    }
-  } catch (err) {
-    if ((err as Error)?.name === "AbortError") return "shared";
-  }
-  try {
-    await navigator.clipboard.writeText(`${text} ${url}`);
-    return "downloaded";
-  } catch {
-    return "failed";
-  }
-}

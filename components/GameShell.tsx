@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CONFIG } from "@/lib/config";
 import { archetypeFor, tallyLine } from "@/lib/archetype";
-import { sharePolaroid, shareChallenge } from "@/lib/share";
+import { sharePolaroid } from "@/lib/share";
 import type { Capture, CatchEntry, Game, GameSnapshotState } from "@/lib/game";
 
 type Loading = "idle" | "loading" | "ready" | "failed";
@@ -245,17 +245,15 @@ export default function GameShell() {
                 against the container's WIDTH, so `pb-[23.2%]` on a 9:16 stage
                 buys only 13% of the height and quietly drops the CTAs below the
                 zone. Percentage `top`/`bottom` resolve against height. */}
-            <div className="absolute inset-x-[var(--core-x)] top-[var(--core-top)] bottom-[var(--core-bottom)] flex flex-col">
-            <header className="shrink-0 text-center">
-              <h2 className="text-[8.5cqw] font-black uppercase leading-none tracking-tight text-foam drop-shadow-[0_2px_0_rgba(18,10,32,0.6)]">
-                {archetype.title}
-              </h2>
-              <p className="mt-1.5 text-[2.9cqw] font-semibold leading-snug text-foam/75">
-                {archetype.line}
-              </p>
-              <p className="mt-1 text-[2.9cqw] font-black uppercase tracking-wide text-gold">
-                {tallyLine(state)}
-              </p>
+            {/* `grid-rows-[auto_minmax(0,1fr)_auto]`, not a flex column: the
+                middle row is the only one allowed to absorb slack, so the
+                header and the CTA always keep their space. Under flex the
+                carousel could out-grow its share on a short stage and push the
+                button out of view — which is what made it flicker. */}
+            <div className="absolute inset-x-[var(--core-x)] top-[var(--core-top)] bottom-[var(--core-bottom)] grid grid-rows-[auto_minmax(0,1fr)_auto]">
+            <header className="pb-[2.4cqw] text-center">
+              <h2 className="ink-title text-[9.5cqw] leading-[0.92]">{archetype.title}</h2>
+              <p className="ink-tally mt-[1.6cqw] text-[3.2cqw]">{tallyLine(state)}</p>
             </header>
 
             <PhotoCarousel
@@ -264,23 +262,14 @@ export default function GameShell() {
               tally={tallyLine(state)}
             />
 
-            <footer className="shrink-0 pt-1.5">
-              <div className="flex flex-col items-stretch gap-2">
-                <button
-                  onClick={handleReplay}
-                  className="rounded-xl bg-splat py-3 text-[3.8cqw] font-black uppercase tracking-wide text-foam shadow-[0_5px_0_#a3125f] active:translate-y-1 active:shadow-[0_1px_0_#a3125f]"
-                >
-                  Go Again
-                </button>
-                <button
-                  onClick={() => void shareChallenge(archetype.title)}
-                  className="rounded-xl border-2 border-surface/45 py-2.5 text-[3.2cqw] font-bold uppercase tracking-wide text-surface active:bg-surface/10"
-                >
-                  Challenge a friend
-                </button>
-              </div>
+            {/* Inside a real effect the player just records again — a menu of
+                CTAs is game furniture. One compact restart stays because the
+                demo is opened as a link, and a reviewer who cannot replay only
+                ever sees one run. Sharing lives on the print itself. */}
+            <footer className="relative z-10 pt-[2.2cqw] text-center">
+              <GoAgainButton onClick={handleReplay} />
               {cameraDenied && (
-                <p className="mt-2 text-center text-[2.4cqw] text-foam/60">
+                <p className="mt-1.5 text-[2.4cqw] text-foam/60">
                   Playing without a camera — drag to fish.
                 </p>
               )}
@@ -575,7 +564,7 @@ function PhotoCarousel({
 
   if (ordered.length === 0) {
     return (
-      <div className="flex min-h-0 flex-1 items-center justify-center">
+      <div className="flex min-h-0 items-center justify-center">
         <p className="rounded-2xl bg-void/80 px-5 py-4 text-center text-[2.8cqw] text-foam/80">
           No photos this take — get the hook up by your face and pull a face.
         </p>
@@ -584,9 +573,13 @@ function PhotoCarousel({
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="grid min-h-0 grid-rows-[minmax(0,1fr)_auto]">
+      {/* `isolate` scopes the per-print z-indexes to this row. Without it a
+          positioned print with `z-index: 2` paints over the dots and the CTA —
+          which sit later in the DOM but are unpositioned, so they lose the
+          stacking contest no matter where they are on screen. */}
       <div
-        className="relative min-h-0 flex-1 touch-none"
+        className="relative isolate min-h-0 touch-none"
         onPointerDown={onDown}
         onPointerUp={onUp}
         onPointerCancel={() => (dragX.current = null)}
@@ -599,7 +592,7 @@ function PhotoCarousel({
               key={c.id}
               className="print absolute inset-0 grid place-items-center"
               style={{
-                transform: `translateX(${offset * 78}%) scale(${active ? 1 : 0.82})`,
+                transform: `translateX(${offset * 70}%) scale(${active ? 1 : 0.82})`,
                 opacity: Math.abs(offset) > 1 ? 0 : active ? 1 : 0.45,
                 zIndex: active ? 2 : 1,
                 pointerEvents: active ? "auto" : "none",
@@ -617,7 +610,7 @@ function PhotoCarousel({
       </div>
 
       {ordered.length > 1 && (
-        <div className="flex shrink-0 items-center justify-center gap-[1.6cqw] pb-1 pt-1.5">
+        <div className="relative z-10 flex items-center justify-center gap-[1.6cqw] pt-[1.6cqw]">
           {ordered.map((c, i) => (
             <button
               key={c.id}
@@ -669,19 +662,30 @@ function Print({
     // The card is sized off the available HEIGHT, not the width — the result
     // screen's vertical budget is the scarce one once the safe zones take
     // their cut, so the print has to shrink to fit rather than overflow.
-    <div className="relative flex h-full max-h-full items-center">
-      <div className="relative flex h-full max-h-full flex-col rounded-[4px] bg-foam p-[1.6cqw] pb-[6cqw] shadow-2xl [aspect-ratio:44/64]">
-        <div className="relative min-h-0 flex-1 overflow-hidden bg-void">
+    <div className="relative flex h-full max-h-full min-w-0 max-w-full items-center">
+      <div className="relative flex h-full max-h-full min-w-0 max-w-full flex-col rounded-[4px] bg-foam p-[1.6cqw] pb-[6cqw] shadow-2xl [aspect-ratio:44/64]">
+        <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden bg-void">
+          {/*
+            Absolutely positioned, and that is load-bearing: a captured frame is
+            360x640, and an in-flow image contributes its intrinsic width to the
+            flex chain's automatic minimum size. The card would then be forced at
+            least 360px wide, `aspect-ratio` would stretch its height to match,
+            and it would overflow its row and cover the dots and the CTA. Out of
+            flow, the photo contributes nothing and the card is sized purely by
+            the height available to it.
+          */}
           {/* Data URLs, so next/image would only get in the way. */}
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={capture.src}
             alt={stamp.label}
-            className="h-full w-full object-cover"
+            className="absolute inset-0 h-full w-full object-cover"
           />
         </div>
 
-        <Stamp label={stamp.label} src={stamp.src} animate={active} />
+        {/* Keyed on `active` so the flight replays every time this print
+            becomes the focused one, not just on first mount. */}
+        <Stamp key={String(active)} label={stamp.label} src={stamp.src} animate={active} />
 
         <div className="absolute inset-x-[1.6cqw] bottom-[1.2cqw] flex items-center justify-between">
           <span className="text-[2.2cqw] font-black uppercase tracking-[0.18em] text-void/45">
@@ -704,6 +708,55 @@ function Print({
 }
 
 /**
+ * Replay, as a sticker rather than a UI button.
+ *
+ * The wordmark carries its own heavy outline and fill, so there is no pill
+ * behind it — a chip would fight the lettering the same way a frame fought the
+ * caught-list glyphs. The press is expressed as a squash, which is what a
+ * sticker being pushed would do.
+ *
+ * Falls back to the plain pill if the sprite is missing, so the run is always
+ * replayable even before the art lands.
+ */
+function GoAgainButton({ onClick }: { onClick: () => void }) {
+  const [ok, setOk] = useState(true);
+  const ref = useRef<HTMLImageElement>(null);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (el && el.complete && el.naturalWidth === 0) setOk(false);
+  }, []);
+
+  if (!ok) {
+    return (
+      <button
+        onClick={onClick}
+        className="rounded-full bg-splat px-7 py-2.5 text-[3.2cqw] font-black uppercase tracking-wide text-foam shadow-[0_4px_0_#a3125f] active:translate-y-1 active:shadow-[0_1px_0_#a3125f]"
+      >
+        Go Again
+      </button>
+    );
+  }
+
+  return (
+    <button
+      onClick={onClick}
+      aria-label="Go again"
+      className="inline-block w-[26cqw] origin-bottom transition-transform duration-100 active:scale-[0.94]"
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        ref={ref}
+        src="/assets/btn_go_again.webp"
+        alt="Go again"
+        className="w-full drop-shadow-[0_3px_6px_rgba(0,0,0,0.45)]"
+        onError={() => setOk(false)}
+      />
+    </button>
+  );
+}
+
+/**
  * The corner stamp. The sprite carries its own lettering; the chip below is
  * only what shows if that sprite has not been made yet, so a missing asset
  * degrades to something readable instead of a broken image.
@@ -720,15 +773,8 @@ function Stamp({ label, src, animate }: { label: string; src: string; animate: b
     const el = imgRef.current;
     if (el && el.complete && el.naturalWidth === 0) setOk(false);
   }, []);
-  const style = animate
-    ? { animation: "stampIn 520ms cubic-bezier(0.2,1.3,0.4,1) both" }
-    : { transform: "rotate(-11deg)" };
-
   return (
-    <div
-      className="pointer-events-none absolute right-[-2cqw] top-[-1.5cqw] w-[24cqw] origin-center"
-      style={style}
-    >
+    <div className={`stamp${animate ? " stamp-fly" : ""}`}>
       {ok ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img

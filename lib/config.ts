@@ -406,10 +406,12 @@ export const CONFIG = {
   water: {
     /**
      * Fraction of the screen height occupied by water, measured from bottom.
-     * Four ninths leaves more of the player's face above the line, which is
-     * both the thing worth photographing and the space the throw happens in.
+     * Two fifths. The face above the line is both the thing worth
+     * photographing and the space the throw arcs through, so the water gives
+     * ground to it — but `fish.depthRange` is a fraction of the water column,
+     * so shrinking this also raises the deepest fish. Reach stays intact.
      */
-    coverage: 4 / 9,
+    coverage: 2 / 5,
     /** Alpha of the translucent water layer drawn over the camera feed. */
     alpha: 0.75,
     /** Base amplitude of the undulating waterline, in canvas units. */

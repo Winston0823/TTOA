@@ -53,9 +53,24 @@ body {
   --vis-bottom: 21.47%;
 
   position: relative;
+
+  /*
+   * A TRUE 9:16 box, always.
+   *
+   * `aspect-ratio` + `height: 100%` + `max-width: 100%` looks like it does this
+   * and does not: on a phone taller than 9:16 the width clamps, the fixed
+   * height wins, and the stage silently becomes 9:19.5. Every safe-zone number
+   * below is a percentage of this box, so a stage that is not 9:16 maps the
+   * whole spec onto the wrong rectangle. Driving WIDTH from the viewport height
+   * and letting `aspect-ratio` derive the height keeps the ratio exact.
+   */
   aspect-ratio: 9 / 16;
-  height: 100%;
-  max-width: 100%;
+  width: min(100%, calc(100vh * 9 / 16));
+  width: min(
+    100%,
+    calc((100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom)) * 9 / 16)
+  );
+  height: auto;
   overflow: hidden;
   border-radius: 18px;
   background: #0d0722;
@@ -180,13 +195,61 @@ body {
   100% { transform: scale(0.6); }
 }
 
-/* The result stamp lands like a rubber stamp: overshoot, settle, no bounce
-   back up. Plays once, when a print becomes the focused card. */
-@keyframes stampIn {
-  0% { opacity: 0; transform: rotate(-32deg) scale(2.1); }
-  55% { opacity: 1; transform: rotate(-8deg) scale(0.92); }
-  75% { transform: rotate(-12deg) scale(1.04); }
-  100% { opacity: 1; transform: rotate(-11deg) scale(1); }
+/*
+ * The result stamp.
+ *
+ * It lands big in the middle of the print, holds long enough to be read as the
+ * verdict on that photo, then shrinks away into the corner it lives in. The
+ * corner position is where it ends up, not where it announces itself.
+ *
+ * `left`/`top`/`width` are percentages of the CARD, not of the stamp, so the
+ * flight path holds at any card size. That means animating layout properties
+ * rather than transforms — acceptable here because it is one element, one
+ * shot, and only on the focused print.
+ */
+.stamp {
+  position: absolute;
+  left: 84%;
+  top: 6%;
+  width: 42%;
+  transform: translate(-50%, -50%) rotate(-11deg);
+  transform-origin: center;
+  pointer-events: none;
+}
+
+.stamp-fly {
+  animation: stampFly 1020ms cubic-bezier(0.66, 0, 0.24, 1) both;
+}
+
+@keyframes stampFly {
+  0% {
+    opacity: 0;
+    left: 50%;
+    top: 46%;
+    width: 84%;
+    transform: translate(-50%, -50%) rotate(-19deg) scale(1.25);
+  }
+  12% {
+    opacity: 1;
+    left: 50%;
+    top: 46%;
+    width: 84%;
+    transform: translate(-50%, -50%) rotate(-7deg) scale(1);
+  }
+  46% {
+    opacity: 1;
+    left: 50%;
+    top: 46%;
+    width: 84%;
+    transform: translate(-50%, -50%) rotate(-7deg) scale(1);
+  }
+  100% {
+    opacity: 1;
+    left: 84%;
+    top: 6%;
+    width: 42%;
+    transform: translate(-50%, -50%) rotate(-11deg) scale(1);
+  }
 }
 
 /* The recording dot. Slow enough to read as "capturing", not as an alarm. */
@@ -202,4 +265,40 @@ body {
     transform 320ms cubic-bezier(0.22, 1, 0.36, 1),
     opacity 320ms ease;
   will-change: transform;
+}
+
+/*
+ * The verdict, and the receipt.
+ *
+ * Set rather than drawn. Seven archetypes at wildly different lengths —
+ * "Skunked" to "Commercial Trawler" is a 2.5x width range — and the title is
+ * the thing that ends up in a share thumbnail at 200px, where intricate custom
+ * lettering mushes and a heavy outline survives. This is the reference sheet's
+ * actual grammar anyway: thick ink outline, hard offset in a second neon, a
+ * slight lean. No asset, works at any length, in any language.
+ *
+ * `paint-order: stroke fill` matters — without it the centred stroke eats into
+ * the letterforms and the counters close up at small sizes.
+ */
+.ink-title {
+  color: #f2ecff;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: -0.015em;
+  -webkit-text-stroke: 0.85cqw #120a20;
+  paint-order: stroke fill;
+  text-shadow:
+    0.5cqw 0.5cqw 0 #ff2d9b,
+    0.9cqw 0.9cqw 0 #120a20;
+  transform: rotate(-1.6deg) skewX(-4deg);
+}
+
+.ink-tally {
+  color: #ffd23d;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  -webkit-text-stroke: 0.42cqw #120a20;
+  paint-order: stroke fill;
+  text-shadow: 0.3cqw 0.3cqw 0 rgba(18, 10, 32, 0.85);
 }
