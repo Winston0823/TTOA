@@ -179,3 +179,27 @@ body {
   62% { transform: scale(0.5); }
   100% { transform: scale(0.6); }
 }
+
+/* The result stamp lands like a rubber stamp: overshoot, settle, no bounce
+   back up. Plays once, when a print becomes the focused card. */
+@keyframes stampIn {
+  0% { opacity: 0; transform: rotate(-32deg) scale(2.1); }
+  55% { opacity: 1; transform: rotate(-8deg) scale(0.92); }
+  75% { transform: rotate(-12deg) scale(1.04); }
+  100% { opacity: 1; transform: rotate(-11deg) scale(1); }
+}
+
+/* The recording dot. Slow enough to read as "capturing", not as an alarm. */
+@keyframes recBlink {
+  0%, 45% { opacity: 1; }
+  70%, 100% { opacity: 0.25; }
+}
+
+/* Prints slide across; the focused one comes forward. Transform only, so the
+   whole carousel stays on the compositor. */
+.print {
+  transition:
+    transform 320ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 320ms ease;
+  will-change: transform;
+}

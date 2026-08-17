@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CONFIG } from "@/lib/config";
+import { archetypeFor, tallyLine } from "@/lib/archetype";
+import { sharePolaroid, shareChallenge } from "@/lib/share";
 import type { Capture, CatchEntry, Game, GameSnapshotState } from "@/lib/game";
 
 type Loading = "idle" | "loading" | "ready" | "failed";
@@ -18,6 +20,21 @@ const INITIAL: GameSnapshotState = {
   submerged: false,
   inputMode: "face",
   captures: [],
+};
+
+/**
+ * What the stamp on each print says, and which sprite carries it.
+ *
+ * The text is baked into the sprite rather than set in CSS over a blank badge:
+ * the lettering is the artwork here, and a system font over a generated shape
+ * reads as a caption stuck on top of a sticker rather than as one stamp.
+ * If a sprite is missing the print falls back to a drawn chip — see `Stamp`.
+ */
+const STAMP: Record<Capture["kind"], { label: string; src: string }> = {
+  catch: { label: "Caught", src: "/assets/stamp_caught.webp" },
+  gulp: { label: "Ate it", src: "/assets/stamp_ate.webp" },
+  mouth: { label: "Wide open", src: "/assets/stamp_open.webp" },
+  tug: { label: "Head tug", src: "/assets/stamp_tug.webp" },
 };
 
 export default function GameShell() {
@@ -108,6 +125,10 @@ export default function GameShell() {
   }, []);
 
   const timePct = Math.max(0, state.timeLeft / CONFIG.runDuration);
+  const archetype = useMemo(
+    () => archetypeFor({ caught: state.caught, caughtRare: state.caughtRare, gulps: state.gulps }),
+    [state.caught, state.caughtRare, state.gulps]
+  );
 
   return (
     <div className="stage">
@@ -136,13 +157,7 @@ export default function GameShell() {
             {/* Timer and caught list both live in the visual-content zone:
                 informational, and tolerant of edge occlusion. */}
             <div className="safe-visual">
-              <div className="pointer-events-none absolute left-0 top-0 h-[1.6cqw] w-[26cqw] overflow-hidden rounded-full bg-void/60">
-                <div
-                  className="h-full rounded-full bg-surface transition-[width] duration-200 ease-linear"
-                  style={{ width: `${timePct * 100}%` }}
-                />
-              </div>
-
+              <RecordRing pct={timePct} secondsLeft={state.timeLeft} />
               <CaughtList catches={state.catches} />
             </div>
 
@@ -173,22 +188,21 @@ export default function GameShell() {
 
         {/* -------------------------------------------------------- TITLE */}
         {state.phase === "title" && (
-          <div className="absolute inset-0 grid place-items-center bg-void/85 px-8 backdrop-blur-[3px]">
-            <div className="w-full max-w-[66cqw] text-center">
-              <h1 className="text-4xl font-extrabold tracking-tight text-foam">
+          <div className="absolute inset-0 grid place-items-center bg-void/85 px-6 backdrop-blur-[3px]">
+            <div className="w-full max-w-[72cqw] text-center">
+              <h1 className="text-[9cqw] font-black uppercase leading-none tracking-tight text-foam">
                 Nose Fisher
               </h1>
-              <p className="mt-3 text-sm leading-relaxed text-foam/70">
-                Move your nose to steer the line.
+
+              <HowToPlay />
+
+              <p className="mt-3 text-[3cqw] leading-relaxed text-foam/70">
+                Move your nose to steer the line. Open your mouth to sink the hook.
                 <br />
-                Open your mouth to sink the hook.
-                <br />
-                Snap your head up to throw the fish —
-                <br />
-                then catch it in your mouth.
+                Snap your head up to throw the fish — then catch it in your mouth.
               </p>
 
-              <div className="mt-8">
+              <div className="mt-5">
                 {loading === "loading" && (
                   <div className="flex flex-col items-center gap-3">
                     <div className="h-1.5 w-40 overflow-hidden rounded-full bg-foam/15">
@@ -207,55 +221,70 @@ export default function GameShell() {
                 {(loading === "ready" || loading === "failed") && (
                   <button
                     onClick={handleStart}
-                    className="rounded-full bg-splat px-10 py-4 text-lg font-black uppercase tracking-wide text-foam shadow-[0_6px_0_#a3125f] active:translate-y-1 active:shadow-[0_2px_0_#a3125f]"
+                    className="rounded-full bg-splat px-10 py-4 text-[4.4cqw] font-black uppercase tracking-wide text-foam shadow-[0_6px_0_#a3125f] active:translate-y-1 active:shadow-[0_2px_0_#a3125f]"
                   >
                     Start fishing
                   </button>
                 )}
               </div>
 
-              <p className="mt-6 text-[11px] text-foam/40">
-                {CONFIG.runDuration}-second run
+              <p className="mt-4 text-[2.6cqw] text-foam/40">
+                {CONFIG.runDuration}-second take
               </p>
             </div>
           </div>
         )}
 
         {/* ------------------------------------------------------- RESULT */}
-        {/* No opaque scrim: the final frame stays visible underneath and the
-            prints scatter across it, so this reads as photos tossed onto the
-            scene rather than a separate screen. */}
+        {/* No opaque scrim: the final frame stays visible underneath, so this
+            reads as prints laid over the scene rather than a separate screen. */}
         {state.phase === "result" && (
-          <div className="absolute inset-0 flex flex-col bg-void/45">
-            <div className="shrink-0 px-5 pt-5">
-              <p className="text-4xl font-black uppercase tracking-tight text-foam drop-shadow-[0_2px_0_rgba(18,10,32,0.6)]">
-                Score
+          <div className="absolute inset-0 bg-void/55">
+            {/* The result card is laid out INSIDE the core safe zone, and it is
+                positioned rather than padded: percentage padding resolves
+                against the container's WIDTH, so `pb-[23.2%]` on a 9:16 stage
+                buys only 13% of the height and quietly drops the CTAs below the
+                zone. Percentage `top`/`bottom` resolve against height. */}
+            <div className="absolute inset-x-[var(--core-x)] top-[var(--core-top)] bottom-[var(--core-bottom)] flex flex-col">
+            <header className="shrink-0 text-center">
+              <h2 className="text-[8.5cqw] font-black uppercase leading-none tracking-tight text-foam drop-shadow-[0_2px_0_rgba(18,10,32,0.6)]">
+                {archetype.title}
+              </h2>
+              <p className="mt-1.5 text-[2.9cqw] font-semibold leading-snug text-foam/75">
+                {archetype.line}
               </p>
-              <p className="mt-1 text-sm font-bold text-foam drop-shadow">
-                {state.caught} fish
-                {state.caughtRare > 0 && (
-                  <span className="text-gold"> · {state.caughtRare} rare</span>
-                )}
-                {state.gulps > 0 && (
-                  <span className="text-splat"> · {state.gulps} eaten</span>
-                )}
+              <p className="mt-1 text-[2.9cqw] font-black uppercase tracking-wide text-gold">
+                {tallyLine(state)}
               </p>
-            </div>
+            </header>
 
-            <PhotoScatter captures={state.captures} />
+            <PhotoCarousel
+              captures={state.captures}
+              archetype={archetype.title}
+              tally={tallyLine(state)}
+            />
 
-            <div className="shrink-0 px-6 pb-7 pt-2 text-center">
-              <button
-                onClick={handleReplay}
-                className="rounded-xl bg-splat px-10 py-3.5 text-base font-black uppercase tracking-wide text-foam shadow-[0_6px_0_#a3125f] active:translate-y-1 active:shadow-[0_2px_0_#a3125f]"
-              >
-                Go Again
-              </button>
+            <footer className="shrink-0 pt-1.5">
+              <div className="flex flex-col items-stretch gap-2">
+                <button
+                  onClick={handleReplay}
+                  className="rounded-xl bg-splat py-3 text-[3.8cqw] font-black uppercase tracking-wide text-foam shadow-[0_5px_0_#a3125f] active:translate-y-1 active:shadow-[0_1px_0_#a3125f]"
+                >
+                  Go Again
+                </button>
+                <button
+                  onClick={() => void shareChallenge(archetype.title)}
+                  className="rounded-xl border-2 border-surface/45 py-2.5 text-[3.2cqw] font-bold uppercase tracking-wide text-surface active:bg-surface/10"
+                >
+                  Challenge a friend
+                </button>
+              </div>
               {cameraDenied && (
-                <p className="mt-3 text-[11px] text-foam/60">
+                <p className="mt-2 text-center text-[2.4cqw] text-foam/60">
                   Playing without a camera — drag to fish.
                 </p>
               )}
+            </footer>
             </div>
           </div>
         )}
@@ -268,6 +297,100 @@ export default function GameShell() {
           <p className="mt-2 text-sm text-foam/60">This one is played in portrait.</p>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * The how-to-play loop.
+ *
+ * A 30-second take is too short to learn in, and the mechanic — nose steers,
+ * mouth pays out — is far easier to show than to write. The loop teaches it
+ * before the camera is ever switched on.
+ *
+ * The art is not made yet, so this renders a placeholder until
+ * `/assets/howto.gif` exists; dropping the file in is the whole handoff.
+ */
+function HowToPlay() {
+  const [hasLoop, setHasLoop] = useState(true);
+  const loopRef = useRef<HTMLImageElement>(null);
+
+  // Same pre-hydration caveat as the stamp: check the decoded state on mount.
+  useEffect(() => {
+    const el = loopRef.current;
+    if (el && el.complete && el.naturalWidth === 0) setHasLoop(false);
+  }, []);
+
+  return (
+    <div className="mx-auto mt-4 w-full max-w-[54cqw]">
+      <div className="relative aspect-[4/5] w-full overflow-hidden rounded-2xl border-2 border-dashed border-surface/30 bg-void/70">
+        {hasLoop ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            ref={loopRef}
+            src="/assets/howto.gif"
+            alt="How to play"
+            className="h-full w-full object-cover"
+            onError={() => setHasLoop(false)}
+          />
+        ) : (
+          <div className="flex h-full w-full flex-col items-center justify-center gap-1 px-4 text-center">
+            <span className="text-[3cqw] font-black uppercase tracking-[0.3em] text-surface/60">
+              How to play
+            </span>
+            <span className="text-[2.4cqw] font-semibold text-foam/35">
+              loop goes here
+            </span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The run clock, drawn as a record ring rather than a progress bar.
+ *
+ * This is a 30-second take inside a camera effect, not a level with a time
+ * limit. A depleting ring around a blinking dot says "you are being recorded";
+ * a bar sliding to empty says "you are running out of game".
+ */
+function RecordRing({ pct, secondsLeft }: { pct: number; secondsLeft: number }) {
+  const R = 44;
+  const C = 2 * Math.PI * R;
+  return (
+    <div className="pointer-events-none absolute left-0 top-0 flex items-center gap-[2cqw]">
+      <div className="relative h-[10cqw] w-[10cqw]">
+        <svg viewBox="0 0 100 100" className="h-full w-full -rotate-90">
+          <circle cx="50" cy="50" r={R} fill="rgba(13,7,34,0.55)" />
+          <circle
+            cx="50"
+            cy="50"
+            r={R}
+            fill="none"
+            stroke="rgba(242,236,255,0.22)"
+            strokeWidth="9"
+          />
+          <circle
+            cx="50"
+            cy="50"
+            r={R}
+            fill="none"
+            stroke="#ff2d9b"
+            strokeWidth="9"
+            strokeLinecap="round"
+            strokeDasharray={C}
+            strokeDashoffset={C * (1 - pct)}
+          />
+        </svg>
+        <span
+          className="absolute left-1/2 top-1/2 h-[2.6cqw] w-[2.6cqw] -translate-x-1/2 -translate-y-1/2 rounded-full bg-splat"
+          style={{ animation: "recBlink 1s steps(1, end) infinite" }}
+        />
+      </div>
+      <span className="text-[3.4cqw] font-black tabular-nums text-foam drop-shadow">
+        {Math.ceil(Math.max(0, secondsLeft))}s
+      </span>
     </div>
   );
 }
@@ -398,101 +521,249 @@ function FishPip({ rare = false }: { rare?: boolean }) {
   );
 }
 
-const KIND_LABEL: Record<Capture["kind"], string> = {
-  catch: "Caught",
-  gulp: "Ate it",
-  mouth: "Wide open",
-  tug: "Head tug",
-};
-
 /**
- * Deterministic per-photo jitter.
+ * The run's prints, as a carousel.
  *
- * Seeded off the capture id rather than Math.random, so a print does not leap
- * to a new angle on every React re-render — the pile has to sit still.
+ * One print at a time, full size, with its neighbours peeking in behind. The
+ * earlier scatter pile showed all four at once but none of them large enough
+ * to actually read — and the share action needs an unambiguous subject, which
+ * a pile does not have.
+ *
+ * Positioning is transform-only against the focused index rather than native
+ * scroll: `body` sets `touch-action: none` to stop iOS bouncing the playfield,
+ * which also kills a scroll-snap container. A swipe handler is the honest way
+ * to get the gesture back.
  */
-function jitter(id: number) {
-  const wobble = (salt: number) => {
-    const v = Math.sin(id * 12.9898 + salt) * 43758.5453;
-    return v - Math.floor(v); // 0..1
-  };
-  return {
-    rotate: (wobble(1) - 0.5) * 22,
-    dx: (wobble(2) - 0.5) * 18,
-    dy: (wobble(3) - 0.5) * 14,
-  };
-}
-
-/**
- * The run's photos, tossed across the final frame as a pile of prints.
- * Tapping one lifts it rather than opening a viewer, so browsing never leaves
- * the card.
- */
-function PhotoScatter({ captures }: { captures: Capture[] }) {
-  // Catches and gulps lead. This is a wrapping layout, so order IS position —
-  // sorting them last would bury the earned shots beneath everything else.
+function PhotoCarousel({
+  captures,
+  archetype,
+  tally,
+}: {
+  captures: Capture[];
+  archetype: string;
+  tally: string;
+}) {
+  // Catches and gulps lead — they are what the player actually earned.
   const ordered = useMemo(() => {
-    const rank = (c: Capture) =>
-      c.kind === "gulp" ? 0 : c.kind === "catch" ? 1 : 2;
+    const rank = (c: Capture) => (c.kind === "gulp" ? 0 : c.kind === "catch" ? 1 : 2);
     return captures.slice().sort((a, b) => rank(a) - rank(b) || a.id - b.id);
   }, [captures]);
 
-  const [raisedId, setRaisedId] = useState<number | null>(null);
+  const [index, setIndex] = useState(0);
+  const dragX = useRef<number | null>(null);
+
+  useEffect(() => {
+    setIndex(0);
+  }, [ordered]);
+
+  const clamp = useCallback(
+    (i: number) => Math.max(0, Math.min(ordered.length - 1, i)),
+    [ordered.length]
+  );
+
+  const onDown = (e: React.PointerEvent) => {
+    dragX.current = e.clientX;
+  };
+  const onUp = (e: React.PointerEvent) => {
+    if (dragX.current === null) return;
+    const dx = e.clientX - dragX.current;
+    dragX.current = null;
+    // 24px is past a tap but short of a deliberate scroll — one flick moves
+    // exactly one print.
+    if (Math.abs(dx) > 24) setIndex((i) => clamp(i + (dx < 0 ? 1 : -1)));
+  };
 
   if (ordered.length === 0) {
     return (
-      <div className="flex flex-1 items-center justify-center px-10">
-        <p className="rounded-2xl bg-void/80 px-5 py-4 text-center text-xs text-foam/80">
-          No photos this run — get the hook up by your face and pull a face.
+      <div className="flex min-h-0 flex-1 items-center justify-center">
+        <p className="rounded-2xl bg-void/80 px-5 py-4 text-center text-[2.8cqw] text-foam/80">
+          No photos this take — get the hook up by your face and pull a face.
         </p>
       </div>
     );
   }
 
   return (
-    <div className="flex-1 overflow-y-auto px-3 py-2">
-      <div className="flex flex-wrap justify-center">
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div
+        className="relative min-h-0 flex-1 touch-none"
+        onPointerDown={onDown}
+        onPointerUp={onUp}
+        onPointerCancel={() => (dragX.current = null)}
+      >
         {ordered.map((c, i) => {
-          const j = jitter(c.id);
-          const raised = c.id === raisedId;
-          const earned = c.kind === "catch" || c.kind === "gulp";
+          const offset = i - index;
+          const active = offset === 0;
           return (
-            <button
+            <div
               key={c.id}
-              onClick={() => setRaisedId(raised ? null : c.id)}
-              aria-label={KIND_LABEL[c.kind]}
-              // Negative margins are what make the prints overlap into a pile
-              // rather than sit in a tidy grid.
-              className="relative -mx-2 -my-1 w-[43%] shrink-0 transition-transform active:scale-95"
+              className="print absolute inset-0 grid place-items-center"
               style={{
-                transform: `rotate(${j.rotate}deg) translate(${j.dx}px, ${j.dy}px) scale(${raised ? 1.08 : 1})`,
-                // Earned shots also sit on top where prints overlap, so a
-                // neighbour never clips the one photo that mattered.
-                zIndex: raised ? 9999 : (earned ? 1000 : 0) + i,
+                transform: `translateX(${offset * 78}%) scale(${active ? 1 : 0.82})`,
+                opacity: Math.abs(offset) > 1 ? 0 : active ? 1 : 0.45,
+                zIndex: active ? 2 : 1,
+                pointerEvents: active ? "auto" : "none",
               }}
             >
-              <div className="rounded-[3px] bg-foam p-1.5 pb-5 shadow-xl">
-                <div className="relative aspect-[9/13] w-full overflow-hidden bg-void">
-                  {/* Data URLs, so next/image would only get in the way. */}
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={c.src}
-                    alt={KIND_LABEL[c.kind]}
-                    className="h-full w-full object-cover"
-                  />
-                </div>
-                <span className="absolute inset-x-0 bottom-1 text-center text-[9px] font-bold uppercase tracking-wide text-void/70">
-                  {c.kind === "gulp"
-                    ? "😋 Ate it"
-                    : c.kind === "catch"
-                      ? "🐟 Caught"
-                      : KIND_LABEL[c.kind]}
-                </span>
-              </div>
-            </button>
+              <Print
+                capture={c}
+                active={active}
+                archetype={archetype}
+                tally={tally}
+              />
+            </div>
           );
         })}
       </div>
+
+      {ordered.length > 1 && (
+        <div className="flex shrink-0 items-center justify-center gap-[1.6cqw] pb-1 pt-1.5">
+          {ordered.map((c, i) => (
+            <button
+              key={c.id}
+              aria-label={`Photo ${i + 1}`}
+              onClick={() => setIndex(i)}
+              className={`h-[1.6cqw] rounded-full transition-all ${
+                i === index ? "w-[5cqw] bg-foam" : "w-[1.6cqw] bg-foam/35"
+              }`}
+            />
+          ))}
+        </div>
+      )}
     </div>
+  );
+}
+
+/** One print: photo, stamp, and — on the focused one — the share action. */
+function Print({
+  capture,
+  active,
+  archetype,
+  tally,
+}: {
+  capture: Capture;
+  active: boolean;
+  archetype: string;
+  tally: string;
+}) {
+  const stamp = STAMP[capture.kind];
+  const [sharing, setSharing] = useState(false);
+
+  const onShare = async () => {
+    if (sharing) return;
+    setSharing(true);
+    try {
+      await sharePolaroid({
+        photo: capture.src,
+        stamp: stamp.src,
+        stampLabel: stamp.label,
+        archetype,
+        tally,
+      });
+    } finally {
+      setSharing(false);
+    }
+  };
+
+  return (
+    // The card is sized off the available HEIGHT, not the width — the result
+    // screen's vertical budget is the scarce one once the safe zones take
+    // their cut, so the print has to shrink to fit rather than overflow.
+    <div className="relative flex h-full max-h-full items-center">
+      <div className="relative flex h-full max-h-full flex-col rounded-[4px] bg-foam p-[1.6cqw] pb-[6cqw] shadow-2xl [aspect-ratio:44/64]">
+        <div className="relative min-h-0 flex-1 overflow-hidden bg-void">
+          {/* Data URLs, so next/image would only get in the way. */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={capture.src}
+            alt={stamp.label}
+            className="h-full w-full object-cover"
+          />
+        </div>
+
+        <Stamp label={stamp.label} src={stamp.src} animate={active} />
+
+        <div className="absolute inset-x-[1.6cqw] bottom-[1.2cqw] flex items-center justify-between">
+          <span className="text-[2.2cqw] font-black uppercase tracking-[0.18em] text-void/45">
+            Nose Fisher
+          </span>
+          {active && (
+            <button
+              onClick={onShare}
+              aria-label="Share this photo"
+              className="grid h-[6.4cqw] w-[6.4cqw] place-items-center rounded-full bg-splat text-foam shadow-[0_2px_0_#a3125f] active:translate-y-[1px] active:shadow-none disabled:opacity-60"
+              disabled={sharing}
+            >
+              <ShareIcon />
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The corner stamp. The sprite carries its own lettering; the chip below is
+ * only what shows if that sprite has not been made yet, so a missing asset
+ * degrades to something readable instead of a broken image.
+ */
+function Stamp({ label, src, animate }: { label: string; src: string; animate: boolean }) {
+  const [ok, setOk] = useState(true);
+  const imgRef = useRef<HTMLImageElement>(null);
+
+  // `onError` only catches failures React was mounted for. An image that 404s
+  // before hydration finishes never fires it, and the print keeps a broken
+  // icon where the stamp should be — so the decoded state is checked once on
+  // mount as well.
+  useEffect(() => {
+    const el = imgRef.current;
+    if (el && el.complete && el.naturalWidth === 0) setOk(false);
+  }, []);
+  const style = animate
+    ? { animation: "stampIn 520ms cubic-bezier(0.2,1.3,0.4,1) both" }
+    : { transform: "rotate(-11deg)" };
+
+  return (
+    <div
+      className="pointer-events-none absolute right-[-2cqw] top-[-1.5cqw] w-[24cqw] origin-center"
+      style={style}
+    >
+      {ok ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          ref={imgRef}
+          src={src}
+          alt={label}
+          className="w-full drop-shadow-[0_2px_4px_rgba(0,0,0,0.35)]"
+          onError={() => setOk(false)}
+        />
+      ) : (
+        <span className="block rounded-md border-[0.5cqw] border-void bg-splat px-[1.6cqw] py-[0.8cqw] text-center text-[2.6cqw] font-black uppercase leading-tight text-foam">
+          {label}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function ShareIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-[60%] w-[60%]" fill="none" aria-hidden>
+      <path
+        d="M12 3v12M12 3l-4 4M12 3l4 4"
+        stroke="currentColor"
+        strokeWidth="2.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M5 13v6a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-6"
+        stroke="currentColor"
+        strokeWidth="2.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
   );
 }
