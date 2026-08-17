@@ -659,11 +659,19 @@ function Print({
   };
 
   return (
-    // The card is sized off the available HEIGHT, not the width — the result
-    // screen's vertical budget is the scarce one once the safe zones take
-    // their cut, so the print has to shrink to fit rather than overflow.
-    <div className="relative flex h-full max-h-full min-w-0 max-w-full items-center">
-      <div className="relative flex h-full max-h-full min-w-0 max-w-full flex-col rounded-[4px] bg-foam p-[1.6cqw] pb-[6cqw] shadow-2xl [aspect-ratio:44/64]">
+    // The card is sized off the available HEIGHT — the vertical budget is the
+    // scarce one once the safe zones take their cut — so it is the GRID item
+    // directly, with `width: auto` derived from `aspect-ratio`.
+    //
+    // It used to be a flex item nested inside another flex row, and Safari
+    // collapsed it to a sliver: the photo is absolutely positioned (so it
+    // contributes no intrinsic width) and `min-width: 0` let everything else
+    // shrink to nothing, leaving Safari to resolve the width from content
+    // rather than from the ratio. A grid item resolves `aspect-ratio` against
+    // its definite height in both engines. `min-w-[28cqw]` is the floor: if a
+    // browser ever fails to derive the width at all, the card comes out narrow
+    // rather than invisible.
+    <div className="relative flex h-full max-h-full w-auto min-w-[28cqw] max-w-full flex-col rounded-[4px] bg-foam p-[1.6cqw] pb-[6cqw] shadow-2xl [aspect-ratio:44/64]">
         <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden bg-void">
           {/*
             Absolutely positioned, and that is load-bearing: a captured frame is
@@ -702,7 +710,6 @@ function Print({
             </button>
           )}
         </div>
-      </div>
     </div>
   );
 }
