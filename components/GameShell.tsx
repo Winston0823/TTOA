@@ -120,8 +120,13 @@ export default function GameShell() {
     await game.startRun();
   }, []);
 
-  const handleReplay = useCallback(async () => {
-    await gameRef.current?.startRun();
+  // Go Again lands on the title screen rather than straight into a run. It is
+  // the only place the how-to loop lives, so a player who missed a step gets to
+  // re-read it — and routing through Start Fishing means the next run always
+  // re-acquires the camera inside a fresh user gesture.
+  const handleGoAgain = useCallback(() => {
+    setCameraDenied(false);
+    gameRef.current?.backToTitle();
   }, []);
 
   const timePct = Math.max(0, state.timeLeft / CONFIG.runDuration);
@@ -188,21 +193,18 @@ export default function GameShell() {
 
         {/* -------------------------------------------------------- TITLE */}
         {state.phase === "title" && (
-          <div className="absolute inset-0 grid place-items-center bg-void/85 px-6 backdrop-blur-[3px]">
-            <div className="w-full max-w-[72cqw] text-center">
-              <h1 className="text-[9cqw] font-black uppercase leading-none tracking-tight text-foam">
-                Nose Fisher
-              </h1>
+          <div className="absolute inset-0 bg-void/85 backdrop-blur-[3px]">
+            {/* Same safe-zone frame as the result screen: title up top, the
+                how-to loop taking the middle, the CTA pinned above the band
+                TikTok's own record controls live in. */}
+            <div className="absolute inset-x-[var(--core-x)] top-[var(--core-top)] bottom-[var(--core-bottom)] grid grid-rows-[auto_minmax(0,1fr)_auto] text-center">
+              <h1 className="ink-title text-[9.5cqw] leading-[0.92]">Nose Fisher</h1>
 
               <HowToPlay />
 
-              <p className="mt-3 text-[3cqw] leading-relaxed text-foam/70">
-                Move your nose to steer the line. Open your mouth to sink the hook.
-                <br />
-                Snap your head up to throw the fish — then catch it in your mouth.
-              </p>
+              <div className="pt-[1.4cqw]">
+                <ScoreLegend />
 
-              <div className="mt-5">
                 {loading === "loading" && (
                   <div className="flex flex-col items-center gap-3">
                     <div className="h-1.5 w-40 overflow-hidden rounded-full bg-foam/15">
@@ -226,11 +228,11 @@ export default function GameShell() {
                     Start fishing
                   </button>
                 )}
-              </div>
 
-              <p className="mt-4 text-[2.6cqw] text-foam/40">
-                {CONFIG.runDuration}-second take
-              </p>
+                <p className="mt-[1.6cqw] text-[2.6cqw] text-foam/40">
+                  {CONFIG.runDuration}-second take
+                </p>
+              </div>
             </div>
           </div>
         )}
@@ -245,16 +247,12 @@ export default function GameShell() {
                 against the container's WIDTH, so `pb-[23.2%]` on a 9:16 stage
                 buys only 13% of the height and quietly drops the CTAs below the
                 zone. Percentage `top`/`bottom` resolve against height. */}
-            {/* Rows are sized to CONTENT and the group is centred, rather than
-                stretched across the zone. Stretching pinned the title to the
-                very top and the CTA to the very bottom, which read as three
-                scattered elements instead of one card.
-                The middle row still needs a definite height for the print (see
-                PhotoCarousel), so the print row carries its own `cqw` height
-                rather than absorbing slack — that also keeps the button inside
-                the core zone on a short stage, which is what the old `1fr`
-                was protecting against. */}
-            <div className="absolute inset-x-[var(--core-x)] top-[var(--core-top)] bottom-[var(--core-bottom)] grid grid-rows-[auto_auto_auto] content-center">
+            {/* `grid-rows-[auto_minmax(0,1fr)_auto]`, not a flex column: the
+                middle row is the only one allowed to absorb slack, so the
+                header and the CTA always keep their space. Under flex the
+                carousel could out-grow its share on a short stage and push the
+                button out of view — which is what made it flicker. */}
+            <div className="absolute inset-x-[var(--core-x)] top-[var(--core-top)] bottom-[var(--core-bottom)] grid grid-rows-[auto_minmax(0,1fr)_auto]">
             <header className="pb-[2.4cqw] text-center">
               <h2 className="ink-title text-[9.5cqw] leading-[0.92]">{archetype.title}</h2>
               <p className="ink-tally mt-[1.6cqw] text-[3.2cqw]">{tallyLine(state)}</p>
@@ -271,7 +269,7 @@ export default function GameShell() {
                 demo is opened as a link, and a reviewer who cannot replay only
                 ever sees one run. Sharing lives on the print itself. */}
             <footer className="relative z-10 pt-[2.2cqw] text-center">
-              <GoAgainButton onClick={handleReplay} />
+              <GoAgainButton onClick={handleGoAgain} />
               {cameraDenied && (
                 <p className="mt-1.5 text-[2.4cqw] text-foam/60">
                   Playing without a camera — drag to fish.
@@ -297,47 +295,269 @@ export default function GameShell() {
 /**
  * The how-to-play loop.
  *
- * A 30-second take is too short to learn in, and the mechanic — nose steers,
- * mouth pays out — is far easier to show than to write. The loop teaches it
- * before the camera is ever switched on.
+ * Seven panels, hard-cut and swipeable, with the caption as live text rather
+ * than baked into the art. That is the whole reason this is a component and
+ * not one animated file: reordering the steps, retiming them or translating a
+ * caption is a one-line change instead of a re-render and a re-upload. Cuts,
+ * not crossfades — a dissolve turns to mush at this size.
  *
- * The art is not made yet, so this renders a placeholder until
- * `/assets/howto.gif` exists; dropping the file in is the whole handoff.
+ * A 30-second take is too short to learn in, and the controls are far easier
+ * to show than to write. This runs before the camera is ever switched on.
  */
-function HowToPlay() {
-  const [hasLoop, setHasLoop] = useState(true);
-  const loopRef = useRef<HTMLImageElement>(null);
+const HOW_TO: { src: string; caption: string }[] = [
+  { src: "/assets/howto_1.webp", caption: "Move your head to aim" },
+  { src: "/assets/howto_2.webp", caption: "Stay above the water to fish" },
+  { src: "/assets/howto_3.webp", caption: "Open your mouth to drop the line" },
+  { src: "/assets/howto_4.webp", caption: "Close it to reel back in" },
+  { src: "/assets/howto_5.webp", caption: "Three ticks, then it bites" },
+  { src: "/assets/howto_6.webp", caption: "Snap your head up to throw" },
+  { src: "/assets/howto_7.webp", caption: "Catch it in your mouth" },
+];
 
-  // Same pre-hydration caveat as the stamp: check the decoded state on mount.
-  useEffect(() => {
-    const el = loopRef.current;
-    if (el && el.complete && el.naturalWidth === 0) setHasLoop(false);
+/** Milliseconds each panel holds. Long enough to read the caption once. */
+const HOW_TO_HOLD = 4500;
+
+/**
+ * How far a drag has to travel before it counts as a swipe: a share of the
+ * panel width, with a floor so the gesture stays reachable on a narrow phone.
+ */
+const SWIPE_RATIO = 0.15;
+const SWIPE_FLOOR = 36;
+
+/** Slop before a drag commits to an axis, so a tap never nudges the carousel. */
+const SWIPE_SLOP = 6;
+
+type Swipe = { id: number; x: number; y: number; axis: "none" | "x" };
+
+function HowToPlay() {
+  const [step, setStep] = useState(0);
+  const [hasArt, setHasArt] = useState(true);
+  const [drag, setDrag] = useState(0);
+  const [dragging, setDragging] = useState(false);
+  // Bumped on every manual move. It is a dependency of the autoplay effect and
+  // nothing else, so a hand-picked panel tears the interval down and starts a
+  // fresh one — you get a whole hold to read it, not the tail of someone
+  // else's. Autoplay itself never switches off; swiping steers the loop rather
+  // than taking it over.
+  const [beat, setBeat] = useState(0);
+  const probe = useRef<HTMLImageElement>(null);
+  const stage = useRef<HTMLDivElement>(null);
+  const swipe = useRef<Swipe | null>(null);
+
+  const nudge = useCallback((dir: number) => {
+    setBeat((b) => b + 1);
+    setStep((i) => (i + dir + HOW_TO.length) % HOW_TO.length);
   }, []);
 
+  const jump = useCallback((i: number) => {
+    setBeat((b) => b + 1);
+    setStep(i);
+  }, []);
+
+  useEffect(() => {
+    // Held still while a finger is down: advancing out from under a drag in
+    // progress fights the person doing it.
+    if (dragging) return;
+    const id = setInterval(() => setStep((i) => (i + 1) % HOW_TO.length), HOW_TO_HOLD);
+    return () => clearInterval(id);
+  }, [beat, dragging]);
+
+  // Same pre-hydration caveat as the stamps: an image that 404s before React
+  // mounts never fires `onError`, so the decoded state is checked directly.
+  useEffect(() => {
+    const el = probe.current;
+    if (el && el.complete && el.naturalWidth === 0) setHasArt(false);
+  }, []);
+
+  const onPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    swipe.current = { id: e.pointerId, x: e.clientX, y: e.clientY, axis: "none" };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  }, []);
+
+  const onPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const s = swipe.current;
+    if (!s || s.id !== e.pointerId) return;
+    const dx = e.clientX - s.x;
+    const dy = e.clientY - s.y;
+    if (s.axis === "none") {
+      if (Math.abs(dx) < SWIPE_SLOP && Math.abs(dy) < SWIPE_SLOP) return;
+      // A first move that is mostly vertical is the page being scrolled, not
+      // the carousel being driven. Bow out and leave the gesture to the page.
+      if (Math.abs(dy) >= Math.abs(dx)) {
+        swipe.current = null;
+        setDrag(0);
+        return;
+      }
+      s.axis = "x";
+      setDragging(true);
+    }
+    setDrag(dx);
+  }, []);
+
+  const onPointerUp = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      const s = swipe.current;
+      swipe.current = null;
+      setDrag(0);
+      setDragging(false);
+      if (!s || s.id !== e.pointerId || s.axis !== "x") return;
+      const dx = e.clientX - s.x;
+      const width = stage.current?.clientWidth ?? 0;
+      if (Math.abs(dx) >= Math.max(SWIPE_FLOOR, width * SWIPE_RATIO)) nudge(dx < 0 ? 1 : -1);
+    },
+    [nudge],
+  );
+
+  const onPointerCancel = useCallback(() => {
+    swipe.current = null;
+    setDrag(0);
+    setDragging(false);
+  }, []);
+
+  const onKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      if (e.key === "ArrowRight") nudge(1);
+      else if (e.key === "ArrowLeft") nudge(-1);
+      else return;
+      e.preventDefault();
+    },
+    [nudge],
+  );
+
+  if (!hasArt) {
+    return (
+      <div className="grid min-h-0 place-items-center">
+        <div className="grid aspect-[4/5] w-[54cqw] place-items-center rounded-2xl border-2 border-dashed border-surface/30 bg-void/70">
+          <span className="text-[3cqw] font-black uppercase tracking-[0.3em] text-surface/60">
+            How to play
+          </span>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="mx-auto mt-4 w-full max-w-[54cqw]">
-      <div className="relative aspect-[4/5] w-full overflow-hidden rounded-2xl border-2 border-dashed border-surface/30 bg-void/70">
-        {hasLoop ? (
+    <div className="grid min-h-0 grid-rows-[minmax(0,1fr)_auto] gap-[1.5cqw]">
+      <div
+        ref={stage}
+        role="group"
+        aria-roledescription="carousel"
+        aria-label="How to play"
+        tabIndex={0}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerCancel}
+        onKeyDown={onKeyDown}
+        // `touch-pan-y` keeps a vertical scroll native while claiming the
+        // horizontal axis, so the browser never fights the swipe handler.
+        className="relative min-h-0 cursor-grab touch-pan-y select-none outline-none active:cursor-grabbing"
+      >
+        {HOW_TO.map((s, i) => (
+          // All seven stay mounted and stacked, so the browser decodes them
+          // once up front — a panel that has to load on its own beat flashes
+          // empty.
           // eslint-disable-next-line @next/next/no-img-element
           <img
-            ref={loopRef}
-            src="/assets/howto.gif"
-            alt="How to play"
-            className="h-full w-full object-cover"
-            onError={() => setHasLoop(false)}
+            key={s.src}
+            ref={i === 0 ? probe : undefined}
+            src={s.src}
+            alt={s.caption}
+            draggable={false}
+            style={{
+              opacity: i === step ? 1 : 0,
+              // A fraction of the travel, not all of it: enough for the drag
+              // to feel connected without pretending the cut is a slide.
+              transform: `translateX(${drag * 0.28}px)`,
+              transition: drag ? "none" : "transform 180ms ease-out",
+            }}
+            className="absolute inset-0 mx-auto h-full w-auto max-w-full object-contain drop-shadow-[0_4px_10px_rgba(0,0,0,0.5)]"
+            onError={i === 0 ? () => setHasArt(false) : undefined}
           />
-        ) : (
-          <div className="flex h-full w-full flex-col items-center justify-center gap-1 px-4 text-center">
-            <span className="text-[3cqw] font-black uppercase tracking-[0.3em] text-surface/60">
-              How to play
-            </span>
-            <span className="text-[2.4cqw] font-semibold text-foam/35">
-              loop goes here
-            </span>
-          </div>
-        )}
+        ))}
+      </div>
+
+      <div>
+        <p className="min-h-[7cqw] px-[2cqw] text-[3.4cqw] font-black uppercase leading-tight tracking-wide text-foam">
+          {HOW_TO[step].caption}
+        </p>
+        <div className="mt-[1cqw] flex items-center justify-center">
+          {HOW_TO.map((s, i) => (
+            // The dot is 1.2cqw of ink inside a much larger button — the
+            // negative margin buys a thumb-sized target without adding height.
+            <button
+              key={s.src}
+              type="button"
+              onClick={() => jump(i)}
+              aria-label={`Step ${i + 1}: ${s.caption}`}
+              aria-current={i === step}
+              className="-my-[1.6cqw] grid place-items-center px-[0.7cqw] py-[1.6cqw]"
+            >
+              <span
+                className={`h-[1.2cqw] rounded-full transition-all ${
+                  i === step ? "w-[4cqw] bg-splat" : "w-[1.2cqw] bg-foam/30"
+                }`}
+              />
+            </button>
+          ))}
+        </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * What counts, as a legend rather than another panel in the loop.
+ *
+ * There is no number anywhere in this game — the run is scored as a rail of
+ * caught fish and resolves to an archetype. The only things a player needs to
+ * know before starting are that gold is worth more than magenta and that
+ * eating one on the way down is a bonus, and both are read at a glance. A
+ * seventh beat in the loop would have pushed it past nine seconds; a legend is
+ * always on screen and costs nothing to skip.
+ *
+ * Built from the pieces already in the game — the same fish sprites the water
+ * and the caught rail use, and the same mouth sprite — so it cannot drift from
+ * what the player will actually see.
+ */
+function ScoreLegend() {
+  return (
+    <div className="flex items-center justify-center gap-[5cqw] pb-[1.6cqw]">
+      <LegendItem label="Common">
+        <FishPip />
+      </LegendItem>
+
+      <LegendItem label="Rare">
+        <FishPip rare />
+      </LegendItem>
+
+      <LegendItem label="Eaten">
+        <span className="relative grid h-full w-full place-items-center">
+          {/* Mouth behind the fish, exactly as the caught rail stacks them. */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/assets/mouth.webp"
+            alt=""
+            aria-hidden
+            className="absolute left-1/2 top-1/2 w-[7cqw] -translate-x-1/2 -translate-y-1/2"
+          />
+          <span className="relative block w-[4cqw]">
+            <FishPip />
+          </span>
+        </span>
+      </LegendItem>
+    </div>
+  );
+}
+
+function LegendItem({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <span className="flex flex-col items-center gap-[0.6cqw]">
+      <span className="grid h-[7.5cqw] w-[7cqw] place-items-center">{children}</span>
+      <span className="text-[2.2cqw] font-black uppercase tracking-[0.14em] text-foam/55">
+        {label}
+      </span>
+    </span>
   );
 }
 
@@ -474,8 +694,10 @@ function CaughtSlot({
         />
       )}
 
+      {/* Width-pinned inside the glyph frame so common and rare read as the
+          same fish at the same size — see the note on `FishPip`. */}
       <div
-        className="relative grid h-full w-full place-items-center"
+        className="relative grid w-[11.6cqw] place-items-center"
         style={
           chomping
             ? { animation: "chompFish 640ms cubic-bezier(0.3,1.2,0.4,1) forwards" }
@@ -490,27 +712,30 @@ function CaughtSlot({
   );
 }
 
+/**
+ * A fish in the UI — the game's own sprite, not a stand-in for it.
+ *
+ * These are the exact files `render.ts` paints into the water, so the rail and
+ * the legend cannot drift from what the player is actually looking at, and the
+ * browser has them decoded already.
+ *
+ * Sized by WIDTH, with the height left to follow. The two sprites do not share
+ * a bounding box — the common fish carries motion ticks above and below that
+ * make it near square, while the rare one is half again as wide as it is tall.
+ * Fitting both into one box would bind them on height and render the rare fish
+ * visibly bigger for no reason a player could name. Matching widths matches the
+ * bodies, which is the thing being compared.
+ */
 function FishPip({ rare = false }: { rare?: boolean }) {
-  const fill = rare ? "#ffd23d" : "#ff2d9b";
   return (
-    <svg viewBox="0 0 16 12" className="h-full w-full drop-shadow-[0_1px_2px_rgba(0,0,0,0.55)]" aria-hidden>
-      {/* Angular, to match the ink sprites rather than a rounded icon set. */}
-      <path
-        d="M1 6l3-3.4 5.2-1L11 6l-1.8 4.4-5.2-1L1 6Z"
-        fill={fill}
-        stroke="#120a20"
-        strokeWidth="1.2"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M11 6l4.2-2.8-.6 5.6L11 6Z"
-        fill={fill}
-        stroke="#120a20"
-        strokeWidth="1.2"
-        strokeLinejoin="round"
-      />
-      <circle cx="4.6" cy="5.4" r="1" fill="#120a20" />
-    </svg>
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={rare ? "/assets/fish_rare.webp" : "/assets/fish_common.webp"}
+      alt=""
+      aria-hidden
+      draggable={false}
+      className="h-auto w-full drop-shadow-[0_1px_2px_rgba(0,0,0,0.55)]"
+    />
   );
 }
 
@@ -577,13 +802,13 @@ function PhotoCarousel({
   }
 
   return (
-    <div className="grid grid-rows-[auto_auto]">
+    <div className="grid min-h-0 grid-rows-[minmax(0,1fr)_auto]">
       {/* `isolate` scopes the per-print z-indexes to this row. Without it a
           positioned print with `z-index: 2` paints over the dots and the CTA —
           which sit later in the DOM but are unpositioned, so they lose the
           stacking contest no matter where they are on screen. */}
       <div
-        className="relative isolate h-[68cqw] max-h-full touch-none"
+        className="relative isolate min-h-0 touch-none"
         onPointerDown={onDown}
         onPointerUp={onUp}
         onPointerCancel={() => (dragX.current = null)}

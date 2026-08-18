@@ -205,13 +205,45 @@ export class Game {
     }
   }
 
-  /** Requests the camera. Falls back to touch input if it fails. */
+  /** True when the element is showing a stream whose video track is still live. */
+  private hasLiveCamera(video: HTMLVideoElement): boolean {
+    const stream = video.srcObject as MediaStream | null;
+    return !!stream && stream.getVideoTracks().some((t) => t.readyState === "live");
+  }
+
+  /** Stops whatever stream the element is holding and detaches it. */
+  private releaseCamera() {
+    const stream = this.video?.srcObject as MediaStream | null;
+    stream?.getTracks().forEach((t) => t.stop());
+    if (this.video) this.video.srcObject = null;
+  }
+
+  /**
+   * Requests the camera. Falls back to touch input if it fails.
+   *
+   * Safe to call before every run, and it has to be: a capture session does not
+   * necessarily survive a finished run. Backgrounding the page, an audio
+   * context restarting, or the OS reclaiming the device all end the track while
+   * the element keeps pointing at the now-dead stream — which is how a replay
+   * used to start with a live timer over a blank void. A live stream is reused,
+   * a dead one is torn down and replaced.
+   */
   async initCamera(video: HTMLVideoElement): Promise<boolean> {
     this.video = video;
     if (!this.tracker) {
       this.inputMode = "touch";
       return false;
     }
+
+    if (this.hasLiveCamera(video)) {
+      this.inputMode = "face";
+      // An element can be attached to a live track and still be paused, which
+      // freezes `readyState` and starves the tracker of new frames.
+      if (video.paused) await video.play().catch(() => {});
+      return true;
+    }
+
+    this.releaseCamera();
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
@@ -271,8 +303,21 @@ export class Game {
     this.emit();
   }
 
+  /**
+   * Returns to the title screen — which is also the how-to screen, so a player
+   * who missed a step gets to read it again before committing to another take.
+   * The run is torn down here rather than on the next start so the idle scene
+   * behind the title is empty rather than littered with the last run's fish.
+   */
   backToTitle() {
     this.phase = "title";
+    this.audio.stopBass();
+    this.audio.stopSpool();
+    this.fishes = [];
+    this.bumps = [];
+    this.flashes = [];
+    this.hookedFish = null;
+    this.timeLeft = CONFIG.runDuration;
     this.emit();
   }
 
@@ -293,8 +338,7 @@ export class Game {
     this.raf = 0;
     this.audio.stop();
     this.tracker?.close();
-    const stream = this.video?.srcObject as MediaStream | null;
-    stream?.getTracks().forEach((t) => t.stop());
+    this.releaseCamera();
   }
 
   // ---------------------------------------------------------------- input
