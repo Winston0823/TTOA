@@ -254,15 +254,39 @@ function drawDeformed(
   }
 }
 
+export interface FishSprites {
+  common: HTMLImageElement | null;
+  rare: HTMLImageElement | null;
+  /** Pufferfish at rest, drifting. */
+  pufferCalm: HTMLImageElement | null;
+  /** Pufferfish swollen and spined, on the hook or in the air. */
+  pufferPuffed: HTMLImageElement | null;
+}
+
 export function drawFish(
   ctx: CanvasRenderingContext2D,
   f: Fish,
-  sprites: { common: HTMLImageElement | null; rare: HTMLImageElement | null },
+  sprites: FishSprites,
   elapsed: number
 ) {
   const rare = f.rarity === "rare";
-  const sprite = rare ? sprites.rare : sprites.common;
-  const w = f.width;
+  const puffer = f.rarity === "puffer";
+
+  // The swap happens halfway through the inflation rather than at either end,
+  // so the sprite change lands under cover of the scale-up instead of popping
+  // against a static body.
+  const sprite = puffer
+    ? f.puff > 0.5
+      ? sprites.pufferPuffed
+      : sprites.pufferCalm
+    : rare
+      ? sprites.rare
+      : sprites.common;
+
+  // Inflation is a real size change, not just a different drawing — a puffed
+  // fish physically takes up more room, which is the whole tell.
+  const w =
+    f.width * (puffer ? 1 + (CONFIG.fish.pufferInflateScale - 1) * f.puff : 1);
 
   ctx.save();
   ctx.globalAlpha = f.fade;

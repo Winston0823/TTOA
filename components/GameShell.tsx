@@ -13,6 +13,7 @@ const INITIAL: GameSnapshotState = {
   timeLeft: CONFIG.runDuration,
   caught: 0,
   caughtRare: 0,
+  score: 0,
   catches: [],
   usedMouth: false,
   showMouthHint: false,
@@ -131,8 +132,14 @@ export default function GameShell() {
 
   const timePct = Math.max(0, state.timeLeft / CONFIG.runDuration);
   const archetype = useMemo(
-    () => archetypeFor({ caught: state.caught, caughtRare: state.caughtRare, gulps: state.gulps }),
-    [state.caught, state.caughtRare, state.gulps]
+    () =>
+      archetypeFor({
+        caught: state.caught,
+        caughtRare: state.caughtRare,
+        gulps: state.gulps,
+        score: state.score,
+      }),
+    [state.caught, state.caughtRare, state.gulps, state.score]
   );
 
   return (
@@ -159,11 +166,14 @@ export default function GameShell() {
         {/* ---------------------------------------------------------- HUD */}
         {state.phase === "playing" && (
           <>
-            {/* Timer and caught list both live in the visual-content zone:
-                informational, and tolerant of edge occlusion. */}
+            {/* Clock and score both live in the visual-content zone:
+                informational, and tolerant of edge occlusion. Opposite corners,
+                because they answer different questions — how long is left, and
+                how you are doing — and a player scanning for one should never
+                have to read past the other. */}
             <div className="safe-visual">
               <RecordRing pct={timePct} secondsLeft={state.timeLeft} />
-              <CaughtList catches={state.catches} />
+              <ScoreCounter score={state.score} />
             </div>
 
             {/* Submerged outranks the mouth hint: while the player's face is
@@ -194,44 +204,77 @@ export default function GameShell() {
         {/* -------------------------------------------------------- TITLE */}
         {state.phase === "title" && (
           <div className="absolute inset-0 bg-void/85 backdrop-blur-[3px]">
-            {/* Same safe-zone frame as the result screen: title up top, the
-                how-to loop taking the middle, the CTA pinned above the band
-                TikTok's own record controls live in. */}
-            <div className="absolute inset-x-[var(--core-x)] top-[var(--core-top)] bottom-[var(--core-bottom)] grid grid-rows-[auto_minmax(0,1fr)_auto] text-center">
-              <h1 className="ink-title text-[9.5cqw] leading-[0.92]">Nose Fisher</h1>
+            {/*
+              Laid out against the PRE-RECORD safe zone, not the recording one
+              the HUD and the result card use. Everything on this screen has to
+              be read and tapped before the take begins, and TikTok's pre-take
+              chrome claims more of the bottom than its recording chrome does —
+              see the `--pre-*` note in globals.css.
 
-              <HowToPlay />
+              Three sections, each its own surface: what you do, what it is
+              worth, and the commitment. The middle row is the only one allowed
+              to absorb slack, so the legend and the CTA keep their space on a
+              short stage and the how-to art gives ground instead.
+            */}
+            <div className="absolute inset-x-[var(--pre-x)] top-0 bottom-[var(--pre-bottom)] grid grid-rows-[24.9cqw_minmax(0,1fr)_auto] gap-[2.8cqw] text-center">
+              {/*
+                The title is artwork, not set type — the lockup carries its own
+                ink outline, cream inner stroke and spark marks, and a lean that
+                a text treatment cannot reproduce.
 
-              <div className="pt-[1.4cqw]">
-                <ScoreLegend />
+                Sized by HEIGHT with the width left to follow, because height
+                is the scarce resource on this screen. This row is `auto` inside
+                a grid whose middle row absorbs every bit of slack, and the
+                how-to art in that row is sized `h-full w-auto` — so a cqw taken
+                here comes straight off the illustration, on both axes at once.
 
-                {loading === "loading" && (
-                  <div className="flex flex-col items-center gap-3">
-                    <div className="h-1.5 w-40 overflow-hidden rounded-full bg-foam/15">
-                      <div className="h-full w-1/3 animate-[floatY_1.2s_ease-in-out_infinite] rounded-full bg-surface" />
+                Do NOT pin the width and cap the height instead: `w-[Ncqw]` with
+                a `max-h` letterboxes a 1.5:1 lockup inside a much wider box, so
+                the art paints far smaller than the space it claims.
+              */}
+              <h1 className="flex min-h-0 items-center justify-center pt-[4.5cqw] pb-[1.5cqw]">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src="/assets/logo_title.webp"
+                  alt="Fisherman's Nose"
+                  draggable={false}
+                  className="max-h-full w-auto"
+                />
+              </h1>
+
+              <section className="panel grid min-h-0 p-[2cqw]">
+                <HowToPlay />
+              </section>
+
+              <div className="grid gap-[2.4cqw]">
+                <section className="panel px-[2cqw] py-[0.9cqw]">
+                  <ScoreLegend />
+                </section>
+
+                <div>
+                  {loading === "loading" && (
+                    <div className="flex flex-col items-center gap-[1.2cqw] py-[1.6cqw]">
+                      <div className="h-[1cqw] w-[26cqw] overflow-hidden rounded-full bg-foam/15">
+                        <div className="h-full w-1/3 animate-[floatY_1.2s_ease-in-out_infinite] rounded-full bg-surface" />
+                      </div>
+                      <p className="text-[2.4cqw] text-foam/50">Loading face tracking…</p>
                     </div>
-                    <p className="text-xs text-foam/50">Loading face tracking…</p>
-                  </div>
-                )}
+                  )}
 
-                {loading === "failed" && (
-                  <p className="mb-4 text-xs text-gold/85">
-                    Face tracking unavailable — you can play by dragging instead.
+                  {loading === "failed" && (
+                    <p className="mb-[1.6cqw] text-[2.4cqw] text-gold/85">
+                      Face tracking unavailable — you can play by dragging instead.
+                    </p>
+                  )}
+
+                  {(loading === "ready" || loading === "failed") && (
+                    <StartButton onClick={handleStart} />
+                  )}
+
+                  <p className="mt-[0.7cqw] text-[2.3cqw] text-foam/40">
+                    {CONFIG.runDuration}-second take
                   </p>
-                )}
-
-                {(loading === "ready" || loading === "failed") && (
-                  <button
-                    onClick={handleStart}
-                    className="rounded-full bg-splat px-10 py-4 text-[4.4cqw] font-black uppercase tracking-wide text-foam shadow-[0_6px_0_#a3125f] active:translate-y-1 active:shadow-[0_2px_0_#a3125f]"
-                  >
-                    Start fishing
-                  </button>
-                )}
-
-                <p className="mt-[1.6cqw] text-[2.6cqw] text-foam/40">
-                  {CONFIG.runDuration}-second take
-                </p>
+                </div>
               </div>
             </div>
           </div>
@@ -253,13 +296,48 @@ export default function GameShell() {
                 carousel could out-grow its share on a short stage and push the
                 button out of view — which is what made it flicker. */}
             <div className="absolute inset-x-[var(--core-x)] top-[var(--core-top)] bottom-[var(--core-bottom)] grid grid-rows-[auto_minmax(0,1fr)_auto]">
-            <header className="pb-[2.4cqw] text-center">
-              <h2 className="ink-title text-[9.5cqw] leading-[0.92]">{archetype.title}</h2>
-              <p className="ink-tally mt-[1.6cqw] text-[3.2cqw]">{tallyLine(state)}</p>
+            {/*
+              The score leads, and everything under it is a caption on it.
+
+              The number is the comparable thing — the one a player reads first,
+              repeats, and tries to beat — so it gets the size. The archetype is
+              the shareable thing rather than the legible one, and it survives
+              being demoted because it is already printed large on the polaroid.
+              The `3 FISH · 1 RARE · 3 EATEN` tally was the receipt for both, and
+              a receipt is a thing you consult, not a thing you read at the end
+              of a 30-second take — it still goes out on the shared print, where
+              there is time for it.
+
+              What that buys is height, and the height goes to the prints: the
+              card is sized off the row it sits in, so a shorter header is a
+              bigger photo.
+            */}
+            <header className="pb-[3.4cqw] text-center">
+              {/* The unit sits UNDER the number rather than beside it, so the
+                  number is optically centred on the stage instead of being
+                  pushed off-axis by a suffix — and so its centre does not move
+                  when the score goes from one digit to two, or picks up a
+                  minus. The unit is a label on the number, not a value beside
+                  it, and stacking says that more plainly than a size jump on
+                  the same line did. */}
+              <p className="ink-tally text-[17cqw] leading-[0.82]">{state.score}</p>
+              <p className="ink-tally mt-[0.6cqw] text-[4.4cqw] leading-none">
+                {Math.abs(state.score) === 1 ? "pt" : "pts"}
+              </p>
+              {/* 4.4cqw, not 5.2: sized so the LONGEST archetype
+                  ("Commercial Trawler") clears the safe zone on one line with
+                  room for the ink stroke, which paints outside the line box. At
+                  5.2 it measured wider than the zone itself. Short titles
+                  reading small is correct — this is a caption on the score now,
+                  and it is already printed large on the polaroid. */}
+              <h2 className="ink-title ink-title-sub mt-[1.6cqw] text-[4.4cqw] leading-[1]">
+                {archetype.title}
+              </h2>
             </header>
 
             <PhotoCarousel
               captures={state.captures}
+              score={state.score}
               archetype={archetype.title}
               tally={tallyLine(state)}
             />
@@ -437,7 +515,7 @@ function HowToPlay() {
   }
 
   return (
-    <div className="grid min-h-0 grid-rows-[minmax(0,1fr)_auto] gap-[1.5cqw]">
+    <div className="grid min-h-0 grid-rows-[minmax(0,1fr)_auto] gap-[1.2cqw]">
       <div
         ref={stage}
         role="group"
@@ -478,10 +556,10 @@ function HowToPlay() {
       </div>
 
       <div>
-        <p className="min-h-[7cqw] px-[2cqw] text-[3.4cqw] font-black uppercase leading-tight tracking-wide text-foam">
+        <p className="min-h-[4.4cqw] px-[1.5cqw] text-[3.1cqw] font-black uppercase leading-tight tracking-wide text-foam">
           {HOW_TO[step].caption}
         </p>
-        <div className="mt-[1cqw] flex items-center justify-center">
+        <div className="mt-[0.4cqw] flex items-center justify-center">
           {HOW_TO.map((s, i) => (
             // The dot is 1.2cqw of ink inside a much larger button — the
             // negative margin buys a thumb-sized target without adding height.
@@ -509,39 +587,47 @@ function HowToPlay() {
 /**
  * What counts, as a legend rather than another panel in the loop.
  *
- * There is no number anywhere in this game — the run is scored as a rail of
- * caught fish and resolves to an archetype. The only things a player needs to
- * know before starting are that gold is worth more than magenta and that
- * eating one on the way down is a bonus, and both are read at a glance. A
- * seventh beat in the loop would have pushed it past nine seconds; a legend is
- * always on screen and costs nothing to skip.
+ * A player needs three things before the take starts: that gold is worth more
+ * than magenta, that eating one on the way down doubles it, and that the cyan
+ * one bites back. All three read at a glance here. A legend is always on
+ * screen and costs nothing to skip, which a fourth beat in the how-to loop
+ * would not be.
+ *
+ * The puffer carries both its numbers — `2 / −3` — because the penalty is the
+ * only rule in the game that can move the score backwards, and finding that
+ * out by losing five points is a bad way to learn it.
  *
  * Built from the pieces already in the game — the same fish sprites the water
- * and the caught rail use, and the same mouth sprite — so it cannot drift from
- * what the player will actually see.
+ * uses, and the same mouth sprite — so it cannot drift from what the player
+ * will actually see.
  */
 function ScoreLegend() {
   return (
-    <div className="flex items-center justify-center gap-[5cqw] pb-[1.6cqw]">
-      <LegendItem label="Common">
+    <div className="flex items-center justify-center gap-[4.5cqw]">
+      <LegendItem label="Common" value="1">
         <FishPip />
       </LegendItem>
 
-      <LegendItem label="Rare">
-        <FishPip rare />
+      <LegendItem label="Rare" value="3">
+        <FishPip species="rare" />
       </LegendItem>
 
-      <LegendItem label="Eaten">
+      <LegendItem label="Puffer" value="2 / −3" warn>
+        <FishPip species="puffer" />
+      </LegendItem>
+
+      <LegendItem label="Eaten" value="×2">
         <span className="relative grid h-full w-full place-items-center">
-          {/* Mouth behind the fish, exactly as the caught rail stacks them. */}
+          {/* Mouth behind the fish, so the bite reads as lips closing over it
+              rather than a jaw stuck to its side. */}
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src="/assets/mouth.webp"
             alt=""
             aria-hidden
-            className="absolute left-1/2 top-1/2 w-[7cqw] -translate-x-1/2 -translate-y-1/2"
+            className="absolute left-1/2 top-1/2 w-[6.2cqw] -translate-x-1/2 -translate-y-1/2"
           />
-          <span className="relative block w-[4cqw]">
+          <span className="relative block w-[3.6cqw]">
             <FishPip />
           </span>
         </span>
@@ -550,16 +636,43 @@ function ScoreLegend() {
   );
 }
 
-function LegendItem({ label, children }: { label: string; children: React.ReactNode }) {
+function LegendItem({
+  label,
+  value,
+  warn = false,
+  children,
+}: {
+  label: string;
+  /** Points this entry is worth, as displayed. */
+  value?: string;
+  /** Renders the value in gold — used for the entry that can cost you. */
+  warn?: boolean;
+  children: React.ReactNode;
+}) {
   return (
-    <span className="flex flex-col items-center gap-[0.6cqw]">
-      <span className="grid h-[7.5cqw] w-[7cqw] place-items-center">{children}</span>
-      <span className="text-[2.2cqw] font-black uppercase tracking-[0.14em] text-foam/55">
+    <span className="flex flex-col items-center gap-[0.4cqw]">
+      <span className="grid h-[6.6cqw] w-[6.2cqw] place-items-center">{children}</span>
+      <span className="text-[2cqw] font-black uppercase tracking-[0.14em] text-foam/55">
         {label}
       </span>
+      {value && (
+        <span
+          className={`text-[2.2cqw] font-black tabular-nums ${
+            warn ? "text-gold" : "text-foam/80"
+          }`}
+        >
+          {value}
+        </span>
+      )}
     </span>
   );
 }
+
+/**
+ * How many seconds left before the clock starts pulsing. Short enough that it
+ * is a last call rather than a countdown running under the whole take.
+ */
+const URGENT_AT = 5;
 
 /**
  * The run clock, drawn as a record ring rather than a progress bar.
@@ -571,8 +684,10 @@ function LegendItem({ label, children }: { label: string; children: React.ReactN
 function RecordRing({ pct, secondsLeft }: { pct: number; secondsLeft: number }) {
   const R = 44;
   const C = 2 * Math.PI * R;
+  const secs = Math.ceil(Math.max(0, secondsLeft));
+  const urgent = secs <= URGENT_AT && secs > 0;
   return (
-    <div className="pointer-events-none absolute left-0 top-0 flex items-center gap-[2cqw]">
+    <div className="pointer-events-none absolute left-0 top-0 flex items-center gap-[1.4cqw]">
       <div className="relative h-[10cqw] w-[10cqw]">
         <svg viewBox="0 0 100 100" className="h-full w-full -rotate-90">
           <circle cx="50" cy="50" r={R} fill="rgba(13,7,34,0.55)" />
@@ -601,113 +716,47 @@ function RecordRing({ pct, secondsLeft }: { pct: number; secondsLeft: number }) 
           style={{ animation: "recBlink 1s steps(1, end) infinite" }}
         />
       </div>
-      <span className="text-[3.4cqw] font-black tabular-nums text-foam drop-shadow">
-        {Math.ceil(Math.max(0, secondsLeft))}s
+      <span
+        className={`ink-hud ink-hud-clock text-[3.4cqw] ${
+          urgent ? "ink-hud-clock-urgent" : ""
+        }`}
+      >
+        {secs}s
       </span>
+
     </div>
   );
 }
 
 /**
- * The caught list — a vertical rail of every fish landed this run, newest at
- * the top, down the right edge of the visual-content safe zone.
+ * The score.
  *
- * Sizing follows the TikTok effect spec's own list frame: 68x44 glyphs on a
- * 54px pitch, against the 390x694 effect canvas. Expressed in cqw so the rail
- * scales with the stage instead of the viewport.
+ * The clock is the effect's FRAME; this is the game inside it. They used to sit
+ * adjacent in the same cream at the same weight, split only by a hairline and a
+ * size jump — which read as one number pair, `17s | 4`, with nothing saying
+ * which was which. Now they hold opposite corners, and the difference in size
+ * and colour does the labelling.
  *
- * Rarity is the only thing the fill encodes: magenta common, gold rare. It is
- * a list, not a score — no number is attached to an entry.
+ * Anchored to the RIGHT edge, and right-aligned, so the number grows leftwards.
+ * A centred or left-anchored counter shifts sideways as it crosses from one
+ * digit to two, and a number that moves while you are looking away from it is
+ * a number you have to re-find. The gold is the same gold the result screen
+ * sets its points in: the number that is gold at the end of a run is the number
+ * that was gold during it.
  */
-function CaughtList({ catches }: { catches: CatchEntry[] }) {
-  const VISIBLE = 6;
-  // Newest first. When the run outruns the rail the oldest fall off, so the
-  // most recent catch is never the one pushed out of view.
-  const shown = [...catches].reverse().slice(0, VISIBLE);
-  const overflow = catches.length - shown.length;
-
-  // Each id chomps exactly once. Without this the animation would replay on
-  // every re-render for as long as the entry stayed on the rail.
-  const chomped = useRef<Set<number>>(new Set());
-  const toChomp = new Set<number>();
-  for (const c of catches) {
-    if (c.gulped && !chomped.current.has(c.id)) {
-      toChomp.add(c.id);
-      chomped.current.add(c.id);
-    }
-  }
-
+function ScoreCounter({ score }: { score: number }) {
   return (
-    <div className="absolute right-0 top-0 flex flex-col items-end gap-[2.4cqw]">
-      {shown.map((c, i) => (
-        <CaughtSlot
-          key={c.id}
-          rarity={c.rarity}
-          gulped={c.gulped}
-          chomping={toChomp.has(c.id)}
-          // Only the newest entry slides in; re-animating the whole column on
-          // every catch reads as a glitch rather than an addition.
-          fresh={i === 0 && !c.gulped}
-        />
-      ))}
-      {overflow > 0 && (
-        <span className="text-[2.8cqw] font-bold text-foam/70 drop-shadow">+{overflow}</span>
-      )}
-    </div>
-  );
-}
-
-function CaughtSlot({
-  rarity,
-  gulped,
-  chomping,
-  fresh,
-}: {
-  rarity: CatchEntry["rarity"];
-  gulped: boolean;
-  chomping: boolean;
-  fresh: boolean;
-}) {
-  const rare = rarity === "rare";
-  return (
-    <div
-      // 17.4cqw ≈ the spec's 68px glyph on a 390px canvas. No frame — the
-      // glyph carries its own outline, and a chip would fight the camera feed.
-      className={`relative grid h-[11.3cqw] w-[17.4cqw] place-items-center ${
-        fresh ? "animate-[slotIn_260ms_cubic-bezier(0.2,1.4,0.4,1)]" : ""
-      }`}
-    >
-      {/* Mouth first in the DOM so it renders BEHIND the fish — the fish sits
-          inside the open lips rather than having a jaw stuck to its side. */}
-      {gulped && (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src="/assets/mouth.webp"
-          alt=""
-          aria-hidden
-          className="pointer-events-none absolute left-1/2 top-1/2 w-[14cqw] -translate-x-1/2 -translate-y-1/2"
-          style={
-            chomping
-              ? { animation: "chompBite 640ms cubic-bezier(0.3,1.2,0.4,1) forwards" }
-              : undefined
-          }
-        />
-      )}
-
-      {/* Width-pinned inside the glyph frame so common and rare read as the
-          same fish at the same size — see the note on `FishPip`. */}
-      <div
-        className="relative grid w-[11.6cqw] place-items-center"
-        style={
-          chomping
-            ? { animation: "chompFish 640ms cubic-bezier(0.3,1.2,0.4,1) forwards" }
-            : gulped
-              ? { transform: "scale(0.6)" }
-              : undefined
-        }
+    <div className="pointer-events-none absolute right-0 top-0 text-right">
+      <span
+        // Keyed on the sign so the sting replays on the transition into
+        // negative rather than only on mount.
+        key={score < 0 ? "neg" : "pos"}
+        className={`ink-hud block text-[12cqw] leading-[0.9] ${
+          score < 0 ? "ink-hud-score-neg" : "ink-hud-score"
+        }`}
       >
-        <FishPip rare={rare} />
-      </div>
+        {score}
+      </span>
     </div>
   );
 }
@@ -715,9 +764,9 @@ function CaughtSlot({
 /**
  * A fish in the UI — the game's own sprite, not a stand-in for it.
  *
- * These are the exact files `render.ts` paints into the water, so the rail and
- * the legend cannot drift from what the player is actually looking at, and the
- * browser has them decoded already.
+ * These are the exact files `render.ts` paints into the water, so the legend
+ * cannot drift from what the player is actually looking at, and the browser has
+ * them decoded already.
  *
  * Sized by WIDTH, with the height left to follow. The two sprites do not share
  * a bounding box — the common fish carries motion ticks above and below that
@@ -726,11 +775,19 @@ function CaughtSlot({
  * visibly bigger for no reason a player could name. Matching widths matches the
  * bodies, which is the thing being compared.
  */
-function FishPip({ rare = false }: { rare?: boolean }) {
+const PIP_SRC: Record<CatchEntry["rarity"], string> = {
+  common: "/assets/fish_common.webp",
+  rare: "/assets/fish_rare.webp",
+  // The legend shows the puffer calm. It only inflates in the water, and a
+  // spiky ball at pip size reads as a smudge.
+  puffer: "/assets/puffer_calm.webp",
+};
+
+function FishPip({ species = "common" }: { species?: CatchEntry["rarity"] }) {
   return (
     // eslint-disable-next-line @next/next/no-img-element
     <img
-      src={rare ? "/assets/fish_rare.webp" : "/assets/fish_common.webp"}
+      src={PIP_SRC[species]}
       alt=""
       aria-hidden
       draggable={false}
@@ -754,10 +811,12 @@ function FishPip({ rare = false }: { rare?: boolean }) {
  */
 function PhotoCarousel({
   captures,
+  score,
   archetype,
   tally,
 }: {
   captures: Capture[];
+  score: number;
   archetype: string;
   tally: string;
 }) {
@@ -830,6 +889,7 @@ function PhotoCarousel({
               <Print
                 capture={c}
                 active={active}
+                score={score}
                 archetype={archetype}
                 tally={tally}
               />
@@ -860,11 +920,13 @@ function PhotoCarousel({
 function Print({
   capture,
   active,
+  score,
   archetype,
   tally,
 }: {
   capture: Capture;
   active: boolean;
+  score: number;
   archetype: string;
   tally: string;
 }) {
@@ -879,6 +941,7 @@ function Print({
         photo: capture.src,
         stamp: stamp.src,
         stampLabel: stamp.label,
+        score,
         archetype,
         tally,
       });
@@ -925,8 +988,11 @@ function Print({
         <Stamp key={String(active)} label={stamp.label} src={stamp.src} animate={active} />
 
         <div className="absolute inset-x-[1.6cqw] bottom-[1.2cqw] flex items-center justify-between">
-          <span className="text-[2.2cqw] font-black uppercase tracking-[0.18em] text-void/45">
-            Nose Fisher
+          {/* One line, always. The mark is five characters longer than the
+              name it replaced and at the old size and tracking it wrapped,
+              which pushed the second line through the bottom of the print. */}
+          <span className="whitespace-nowrap text-[1.85cqw] font-black uppercase tracking-[0.1em] text-void/45">
+            Fisherman&rsquo;s Nose
           </span>
           {active && (
             <button
@@ -954,6 +1020,58 @@ function Print({
  * Falls back to the plain pill if the sprite is missing, so the run is always
  * replayable even before the art lands.
  */
+/**
+ * The primary CTA, as a sticker rather than a pill — same reasoning as
+ * GO AGAIN: the wordmark carries its own ink outline and cream border, so a
+ * chip behind it would only fight the lettering.
+ *
+ * Sized by WIDTH here (unlike the title lockup) because this sits in the
+ * grid's bottom `auto` row, where width is the constrained axis and height
+ * follows; the row grows to fit whatever the sprite needs.
+ *
+ * Falls back to the pill if the sprite is missing, so the run always starts.
+ */
+function StartButton({ onClick }: { onClick: () => void }) {
+  const [ok, setOk] = useState(true);
+  const ref = useRef<HTMLImageElement>(null);
+
+  // `onError` only catches failures React was mounted for; an image that 404s
+  // before hydration finishes never fires it.
+  useEffect(() => {
+    const el = ref.current;
+    if (el && el.complete && el.naturalWidth === 0) setOk(false);
+  }, []);
+
+  if (!ok) {
+    return (
+      <button
+        onClick={onClick}
+        className="w-full rounded-full bg-splat py-[2.6cqw] text-[4.2cqw] font-black uppercase tracking-wide text-foam shadow-[0_0.9cqw_0_#a3125f] active:translate-y-[0.5cqw] active:shadow-[0_0.4cqw_0_#a3125f]"
+      >
+        Start fishing
+      </button>
+    );
+  }
+
+  return (
+    <button
+      onClick={onClick}
+      aria-label="Start fishing"
+      className="mx-auto block w-[44cqw] origin-bottom transition-transform duration-100 active:scale-[0.94]"
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        ref={ref}
+        src="/assets/btn_start.webp"
+        alt="Start fishing"
+        draggable={false}
+        className="w-full drop-shadow-[0_3px_6px_rgba(0,0,0,0.45)]"
+        onError={() => setOk(false)}
+      />
+    </button>
+  );
+}
+
 function GoAgainButton({ onClick }: { onClick: () => void }) {
   const [ok, setOk] = useState(true);
   const ref = useRef<HTMLImageElement>(null);

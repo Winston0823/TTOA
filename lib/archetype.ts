@@ -3,11 +3,12 @@ import type { GameSnapshotState } from "./game";
 /**
  * The run's verdict, in one line.
  *
- * A fish count is a score — it tells you how you did, and nothing else. The
- * brief this game is built against asks for a result that can be *compared,
- * explained or roasted*, which a number cannot carry on its own. An archetype
- * can: two players can hold "HUMAN PELICAN" and "SKUNKED" up against each
- * other and immediately have something to say.
+ * The score says how you did. It does not say what you ARE, and the brief this
+ * game is built against asks for a result that can be *compared, explained or
+ * roasted* — which a number cannot carry on its own. An archetype can: two
+ * players can hold "HUMAN PELICAN" and "POISON CONTROL" up against each other
+ * and immediately have something to say. The two ship together on the result
+ * card: the number to compare, the title to argue about.
  *
  * Rules are ordered most-specific first and the first match wins, so the
  * unusual runs get the interesting labels and the ordinary run falls through
@@ -22,10 +23,15 @@ export function archetypeFor(s: {
   caught: number;
   caughtRare: number;
   gulps: number;
+  score: number;
 }): Archetype {
-  const { caught, caughtRare, gulps } = s;
+  const { caught, caughtRare, gulps, score } = s;
 
   if (caught === 0) return { title: "Skunked" };
+
+  // A negative total takes precedence over everything: there is exactly one way
+  // to get one, and it is far funnier than whatever else the run did.
+  if (score < 0) return { title: "Poison Control" };
 
   if (gulps >= caught) return { title: "Human Pelican" };
   if (caught >= 5) return { title: "Commercial Trawler" };

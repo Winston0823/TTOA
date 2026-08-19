@@ -19,6 +19,7 @@ import {
   drawCamera,
   drawCaustics,
   drawFish,
+  type FishSprites,
   drawPulseRing,
   drawRope,
   drawTension,
@@ -51,6 +52,13 @@ export interface CatchEntry {
   rarity: Rarity;
   /** True once this specific fish was also caught in the mouth on the way down. */
   gulped: boolean;
+  /**
+   * What this fish ended up being worth. Set to the reeled value when it is
+   * thrown clear, then REPLACED by the eaten value if it is later gulped —
+   * never summed, so one fish is always one number. Negative for a swallowed
+   * pufferfish.
+   */
+  points: number;
 }
 
 export interface GameSnapshotState {
@@ -59,6 +67,8 @@ export interface GameSnapshotState {
   caught: number;
   /** Of those catches, how many were the rare tier. */
   caughtRare: number;
+  /** Running point total. Can go negative — see the pufferfish. */
+  score: number;
   /** Every catch this run, oldest first. Drives the on-screen caught list. */
   catches: CatchEntry[];
   /** True once the player has opened their mouth at least once. */
@@ -83,6 +93,8 @@ interface Flash {
 const SPRITE_FILES = {
   common: "/assets/fish_common.webp",
   rare: "/assets/fish_rare.webp",
+  pufferCalm: "/assets/puffer_calm.webp",
+  pufferPuffed: "/assets/puffer_puffed.webp",
 } as const;
 
 export class Game {
@@ -107,6 +119,7 @@ export class Game {
   private phase: Phase = "title";
   private caught = 0;
   private caughtRare = 0;
+  private score = 0;
   private catches: CatchEntry[] = [];
   private timeLeft: number = CONFIG.runDuration;
   private usedMouth = false;
@@ -145,9 +158,11 @@ export class Game {
     ok: false,
   };
 
-  private sprites: { common: HTMLImageElement | null; rare: HTMLImageElement | null } = {
+  private sprites: FishSprites = {
     common: null,
     rare: null,
+    pufferCalm: null,
+    pufferPuffed: null,
   };
   private hookSprite: HTMLImageElement | null = null;
 
@@ -276,6 +291,7 @@ export class Game {
     this.phase = "playing";
     this.caught = 0;
     this.caughtRare = 0;
+    this.score = 0;
     this.catches = [];
     this.timeLeft = CONFIG.runDuration;
     this.usedMouth = false;
@@ -318,6 +334,7 @@ export class Game {
     this.flashes = [];
     this.hookedFish = null;
     this.timeLeft = CONFIG.runDuration;
+    this.score = 0;
     this.emit();
   }
 
@@ -471,11 +488,17 @@ export class Game {
       // downward weight the player has to out-pull, plus a thrash that makes
       // the haul a fight rather than a straight lift.
       const f = CONFIG.forces;
-      const rare = this.hookedFish.rarity === "rare";
-      const scale = rare ? CONFIG.fish.rareStruggleScale : 1;
+      const species = this.hookedFish.rarity;
+      const scale =
+        species === "rare"
+          ? CONFIG.fish.rareStruggleScale
+          : species === "puffer"
+            ? CONFIG.fish.pufferStruggleScale
+            : 1;
       const phase = this.struggleTime * Math.PI * 2 * f.struggleFrequency;
       const ramp = Math.min(1, this.struggleTime / CONFIG.fish.fightRampIn);
       // A rare fish fights noticeably harder — that is what makes it feel rare.
+      // A puffer sits between the two: swollen, awkward, but not a prize.
       const power = f.struggleStrength * scale;
       this.rope.applyForce(
         this.rope.hookIndex,
@@ -600,8 +623,12 @@ export class Game {
 
     this.caught += 1;
     if (f.rarity === "rare") this.caughtRare += 1;
+    // Reeling it up and throwing it clear is what banks the points. A puffer
+    // pays here too — it only turns against you if you then eat it.
+    const points = CONFIG.score.reeled[f.rarity];
+    this.score += points;
     // Keyed by fish id so a later gulp can find this exact entry and flag it.
-    this.catches.push({ id: f.id, rarity: f.rarity, gulped: false });
+    this.catches.push({ id: f.id, rarity: f.rarity, gulped: false, points });
     this.hookedFish = null;
     this.flashes.push({ x: hook.x, y: hook.y, t: 0, seed: f.id * 0.618 });
     this.addBump(hook.x, 1);
@@ -672,12 +699,21 @@ export class Game {
 
       // Gone — eaten, not landed. Culled next frame by `isFishGone`.
       f.fade = 0;
-      this.gulps += G.points;
+      this.gulps += 1;
       // Upgrade the entry this fish already earned when it was thrown, rather
       // than adding a second one — a gulp is a better finish to one catch, not
-      // an extra fish.
+      // an extra fish. The same logic governs the points: swap the reeled value
+      // out for the eaten one so the fish is still worth exactly one number.
+      // On a puffer that swap is a five-point swing in the wrong direction.
+      const eaten = CONFIG.score.eaten[f.rarity];
       const entry = this.catches.find((c) => c.id === f.id);
-      if (entry) entry.gulped = true;
+      if (entry) {
+        this.score += eaten - entry.points;
+        entry.points = eaten;
+        entry.gulped = true;
+      } else {
+        this.score += eaten;
+      }
       this.flashes.push({ x: m.x, y: m.y, t: 0, seed: f.id * 0.618 });
       this.audio.catchSting();
       this.addCapture("gulp", this.funnyScore(dt, payout, "gulp").total);
@@ -861,6 +897,7 @@ export class Game {
       timeLeft: this.timeLeft,
       caught: this.caught,
       caughtRare: this.caughtRare,
+      score: this.score,
       // Copied so React sees a new array identity each emit.
       catches: this.catches.map((c) => ({ ...c })),
       usedMouth: this.usedMouth,

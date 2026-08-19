@@ -7,6 +7,8 @@ const config: Config = {
     extend: {
       fontFamily: {
         display: ["ui-rounded", "SF Pro Rounded", "Nunito", "system-ui", "sans-serif"],
+        /** HUD numerals only. See the note in `app/layout.tsx`. */
+        hud: ["var(--font-hud)", "ui-rounded", "system-ui", "sans-serif"],
       },
       colors: {
         void: "#0d0722",

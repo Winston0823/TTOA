@@ -10,7 +10,12 @@ export type FishState =
   | "flung"
   | "flee";
 
-export type Rarity = "common" | "rare";
+/**
+ * Which species a fish is. Still called `rarity` on the fish and on catch
+ * entries because that is what the field has always meant to the rest of the
+ * game — but it now selects a point value, not just a tier.
+ */
+export type Rarity = "common" | "rare" | "puffer";
 
 export interface Fish {
   id: number;
@@ -35,6 +40,12 @@ export interface Fish {
   twitch: number;
   /** Set when the fish is consumed so the renderer can fade it. */
   fade: number;
+  /**
+   * Pufferfish inflation, 0 (calm) to 1 (fully puffed). Eased rather than
+   * switched so the swell reads as the fish reacting to being caught. Always 0
+   * on the other two species.
+   */
+  puff: number;
   /** Velocity, only meaningful while `flung`. Canvas units per second. */
   vx: number;
   vy: number;
@@ -48,17 +59,38 @@ export function spawnFish(canvasW: number, waterTop: number, canvasH: number): F
   const C = CONFIG.fish;
   const dir: -1 | 1 = Math.random() < 0.5 ? -1 : 1;
 
-  const rarity: Rarity = Math.random() < C.rareChance ? "rare" : "common";
-  const isRare = rarity === "rare";
+  // One roll across all three species, so the shares add up to 1 instead of
+  // compounding — puffer, then rare, then whatever is left is a common.
+  const roll = Math.random();
+  const rarity: Rarity =
+    roll < C.pufferChance
+      ? "puffer"
+      : roll < C.pufferChance + C.rareChance
+        ? "rare"
+        : "common";
 
-  // Rare fish live deeper, so reaching one is a deliberate commitment.
-  const band = isRare ? C.rareDepthRange : C.depthRange;
+  // Rare fish live deeper, so reaching one is a deliberate commitment; puffers
+  // hang in the middle of the column where they are hard to avoid.
+  const band =
+    rarity === "rare"
+      ? C.rareDepthRange
+      : rarity === "puffer"
+        ? C.pufferDepthRange
+        : C.depthRange;
   const depth = band[0] + Math.random() * (band[1] - band[0]);
 
-  const width = C.width * (isRare ? C.rareScale : 1);
+  const sizeScale =
+    rarity === "rare" ? C.rareScale : rarity === "puffer" ? C.pufferScale : 1;
+  const speedScale =
+    rarity === "rare"
+      ? C.rareSpeedScale
+      : rarity === "puffer"
+        ? C.pufferSpeedScale
+        : 1;
+
+  const width = C.width * sizeScale;
   const speed =
-    (C.speed + (Math.random() * 2 - 1) * C.speedJitter) *
-    (isRare ? C.rareSpeedScale : 1);
+    (C.speed + (Math.random() * 2 - 1) * C.speedJitter) * speedScale;
 
   return {
     id: nextId++,
@@ -76,6 +108,7 @@ export function spawnFish(canvasW: number, waterTop: number, canvasH: number): F
     bobPhase: Math.random() * Math.PI * 2,
     twitch: 0,
     fade: 1,
+    puff: 0,
     vx: 0,
     vy: 0,
     spin: 0,
@@ -112,6 +145,17 @@ export function updateFish(
   f.stateTime += dt;
   // Advances faster while hooked so the thrash reads as panic.
   f.animTime += dt * (f.state === "hooked" ? 1.9 : 1);
+
+  // A puffer inflates the moment it is caught and stays swollen through the
+  // throw — on the hook and in the air are exactly the two moments the player
+  // is looking straight at it and deciding whether to eat it.
+  if (f.rarity === "puffer") {
+    const target = f.state === "hooked" || f.state === "flung" ? 1 : 0;
+    const step = dt / C.pufferInflateTime;
+    f.puff = target > f.puff
+      ? Math.min(1, f.puff + step)
+      : Math.max(0, f.puff - step);
+  }
 
   const distToHook = Math.hypot(f.x - hookX, f.y - hookY);
   // A hook that is out of the water is not bait. Without this, reeling a catch

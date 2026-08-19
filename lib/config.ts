@@ -125,6 +125,23 @@ export const CONFIG = {
     struggleFrequency: 1.7,
   },
 
+  // ---------------------------------------------------------------- score
+  /**
+   * What a fish is worth.
+   *
+   * One value per fish, chosen by how the fish ENDED — never both. Reeling a
+   * fish up and throwing it clear banks `reeled`; finishing that same fish in
+   * your mouth replaces it with `eaten`, it does not stack on top. That is what
+   * makes the mouth catch a decision rather than a free bonus: on a pufferfish,
+   * choosing to eat what you just landed swings you five points the wrong way.
+   */
+  score: {
+    /** Reeled up and thrown clear of the water. */
+    reeled: { common: 1, rare: 3, puffer: 2 },
+    /** Caught in the mouth on the way down. REPLACES the reeled value. */
+    eaten: { common: 2, rare: 6, puffer: -3 },
+  },
+
   // ----------------------------------------------------------------- fish
   fish: {
     /** Base horizontal drift speed, canvas units per second. */
@@ -150,6 +167,28 @@ export const CONFIG = {
     rareStruggleScale: 1.45,
     /** Rare fish spawn deeper — you have to commit to reach them. */
     rareDepthRange: [0.45, 0.82] as [number, number],
+
+    /**
+     * Chance a spawned fish is a pufferfish — the only fish that can cost you.
+     * Rolled against the same random as `rareChance`, so the three species
+     * split the spawn pool rather than compounding.
+     */
+    pufferChance: 0.2,
+    /** Puffers draw a touch smaller than a common while deflated. */
+    pufferScale: 0.92,
+    /**
+     * How much wider the puffer draws once inflated. The inflated sprite is
+     * itself drawn wider than the calm one, so this is the extra swell on top.
+     */
+    pufferInflateScale: 1.3,
+    /** Seconds for the puff to fully inflate or settle back down. */
+    pufferInflateTime: 0.16,
+    /** A ball of spines is not built for speed. */
+    pufferSpeedScale: 0.85,
+    /** Inflated and furious — a puffer fights harder than a common. */
+    pufferStruggleScale: 1.2,
+    /** Puffers hang mid-column, between the commons and the deep gold. */
+    pufferDepthRange: [0.3, 0.7] as [number, number],
     /**
      * Distance at which a fish notices the hook and starts approaching.
      * Deliberately tight: a fish should only commit once the hook has come to
@@ -263,17 +302,20 @@ export const CONFIG = {
     /**
      * A thrown fish can be caught on the way down — in your mouth.
      *
-     * Pure upside: the throw has already scored, so a gulp is a bonus and a
-     * miss costs nothing. The tension is built in rather than bolted on,
-     * because opening wide to catch also pays the rope out and sinks your hook.
+     * On a common or a rare this is pure upside — it doubles what the fish was
+     * worth, and missing costs nothing. On a pufferfish it is a trap. The
+     * tension is built in rather than bolted on, because opening wide to catch
+     * also pays the rope out and sinks your hook.
      */
     gulp: {
       /** Radius around the mouth centre that swallows a falling fish. */
       radius: 130,
       /** Minimum mouth aperture (0..1) for the mouth to count as open. */
       aperture: 0.45,
-      /** Extra points a gulp is worth, on top of the fish already landed. */
-      points: 1,
+      /**
+       * Scoring for a gulp lives in `CONFIG.score.eaten`, not here — a mouth
+       * catch replaces the fish's reeled value rather than adding to it.
+       */
       /**
        * Only a DESCENDING fish can be gulped. Without this the fish is eaten on
        * the way up, a pixel after it leaves the hook, and the arc never happens.

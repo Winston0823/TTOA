@@ -52,6 +52,24 @@ body {
   --vis-top: 11.816%;
   --vis-bottom: 21.47%;
 
+  /*
+   * The PRE-RECORD core zone ("开拍前" in the spec), which is deliberately NOT
+   * the same box as the recording one above. TikTok's pre-take chrome sits
+   * lower on screen than its recording chrome, so the region guaranteed to be
+   * fully visible AND tappable before the take is wider but far shorter:
+   *
+   *   x 52..338   (286 wide, against 260 while recording)
+   *   y 97..445   (348 tall, against 451 while recording)
+   *
+   * The title screen is a pre-record screen, so its CTA and its copy belong in
+   * here. The 445 floor is the one that bites: a Start button laid out against
+   * the recording zone's 533 ends up underneath the effect tray, visible in
+   * mockups and untappable on a phone.
+   */
+  --pre-x: 13.333%;
+  --pre-top: 13.977%;
+  --pre-bottom: 35.879%;
+
   position: relative;
 
   /*
@@ -137,19 +155,6 @@ body {
   animation: floatY 2.6s ease-in-out infinite;
 }
 
-/* New caught-list entries pop in from the right with a slight overshoot, so a
-   catch registers peripherally while the player is looking at the water. */
-@keyframes slotIn {
-  0% {
-    opacity: 0;
-    transform: translateX(18px) scale(0.8);
-  }
-  100% {
-    opacity: 1;
-    transform: translateX(0) scale(1);
-  }
-}
-
 /* Interactive controls, CTAs and key copy. Nothing here may be clipped. */
 .safe-core {
   position: absolute;
@@ -173,26 +178,6 @@ body {
 .safe-core > *,
 .safe-visual > * {
   pointer-events: auto;
-}
-
-/* The mouth is head-on and sits BEHIND the fish, so the bite reads as lips
-   closing over it rather than a jaw swinging in from the side. It scales up
-   from behind, snaps shut on Y, then settles open. No scaleX — the sprite is
-   symmetrical and has no facing. */
-@keyframes chompBite {
-  0% { opacity: 0; transform: scale(0.45); }
-  22% { opacity: 1; transform: scale(1.18); }
-  46% { opacity: 1; transform: scale(1.18); }
-  62% { opacity: 1; transform: scale(1.1) scaleY(0.34); }
-  80% { opacity: 1; transform: scale(1) scaleY(1.06); }
-  100% { opacity: 1; transform: scale(1); }
-}
-
-/* Fish shrinks into the mouth and stays there — it got eaten. */
-@keyframes chompFish {
-  0%, 40% { transform: scale(1); }
-  62% { transform: scale(0.5); }
-  100% { transform: scale(0.6); }
 }
 
 /*
@@ -301,4 +286,112 @@ body {
   -webkit-text-stroke: 0.42cqw #120a20;
   paint-order: stroke fill;
   text-shadow: 0.3cqw 0.3cqw 0 rgba(18, 10, 32, 0.85);
+}
+
+/*
+ * A section on the pre-take screen.
+ *
+ * The scrim behind it is already dark, so separation comes from a slight lift
+ * and a hairline rather than a heavier fill — an opaque card would fight the
+ * ink art it is holding. Sized in cqw so the corner radius and the rule keep
+ * their weight relative to the stage rather than the viewport.
+ */
+.panel {
+  border-radius: 3.6cqw;
+  background: rgba(242, 236, 255, 0.05);
+  box-shadow:
+    inset 0 0 0 0.26cqw rgba(242, 236, 255, 0.14),
+    0 0.5cqw 1.6cqw rgba(0, 0, 0, 0.3);
+}
+
+/*
+ * HUD numerals.
+ *
+ * The one surface in the game that has to stay readable over an ARBITRARY
+ * image — a lit forehead, a pale wall, hair — so it cannot rely on contrast
+ * with the background. It previously relied on Tailwind's bare `drop-shadow`,
+ * which is a 10%-alpha 2px shadow: enough over dark water, invisible over skin.
+ *
+ * Same grammar as `.ink-tally` on the result screen, deliberately: the number
+ * that is gold at the end of a run is the number that was gold during it. A
+ * near-black stroke does the separating, the hard offset adds the ink drop, and
+ * `paint-order: stroke fill` keeps a centred stroke out of the counters.
+ *
+ * `tabular-nums` matters here and not on the result screen — a counting clock
+ * that reflows every second reads as a jitter.
+ */
+.ink-hud {
+  font-family: var(--font-hud), ui-rounded, system-ui, sans-serif;
+  font-feature-settings: "tnum" 1;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+  paint-order: stroke fill;
+  -webkit-text-stroke: 0.55cqw #120a20;
+  text-shadow:
+    0.28cqw 0.28cqw 0 rgba(18, 10, 32, 0.9),
+    0 0 1.4cqw rgba(18, 10, 32, 0.55);
+}
+
+/* The clock. Cream and secondary — it frames the take, it is not the game. */
+.ink-hud-clock {
+  color: #f2ecff;
+  -webkit-text-stroke-width: 0.42cqw;
+}
+
+/* The score. Gold and primary, matching the result screen's points. */
+.ink-hud-score {
+  color: #ffd23d;
+}
+
+/*
+ * A negative total.
+ *
+ * It used to turn gold — the same gold as the rare fish and as the points on
+ * the result screen, so being stung looked exactly like being rewarded. Magenta
+ * is the game's damage colour, and the nudge sells it as a hit rather than a
+ * value.
+ */
+.ink-hud-score-neg {
+  color: #ff2d9b;
+  animation: hudSting 420ms cubic-bezier(0.3, 1.4, 0.4, 1);
+}
+
+@keyframes hudSting {
+  0% { transform: translateX(0) scale(1); }
+  25% { transform: translateX(-0.7cqw) scale(1.12); }
+  55% { transform: translateX(0.5cqw) scale(1.06); }
+  100% { transform: translateX(0) scale(1); }
+}
+
+/*
+ * The last few seconds.
+ *
+ * The ring depletes linearly and the digits looked identical at 30s and at 2s,
+ * so the end of the take arrived without warning. The clock pulses instead of
+ * changing colour — colour is already carrying rarity, damage and score here,
+ * and a fourth meaning on the same channel would not read.
+ */
+.ink-hud-clock-urgent {
+  animation: hudTick 1s steps(1, end) infinite;
+}
+
+@keyframes hudTick {
+  0%, 55% { color: #ff2d9b; transform: scale(1.08); }
+  56%, 100% { color: #f2ecff; transform: scale(1); }
+}
+
+/*
+ * `.ink-title` at small sizes.
+ *
+ * The stroke is a constant 0.85cqw, which is ~9% of the em at the 9.5cqw the
+ * result screen used to set its archetype in — and ~16% at the 5.2cqw it is set
+ * in now that the score has taken the top slot. At that ratio a centred stroke
+ * closes the counters even with `paint-order`, so the whole word turns into a
+ * blob. Thinner stroke, tighter offset, same grammar.
+ */
+.ink-title-sub {
+  -webkit-text-stroke-width: 0.45cqw;
+  text-shadow:
+    0.28cqw 0.28cqw 0 #ff2d9b,
+    0.5cqw 0.5cqw 0 #120a20;
 }
