@@ -243,15 +243,6 @@ body {
   70%, 100% { opacity: 0.25; }
 }
 
-/* Prints slide across; the focused one comes forward. Transform only, so the
-   whole carousel stays on the compositor. */
-.print {
-  transition:
-    transform 320ms cubic-bezier(0.22, 1, 0.36, 1),
-    opacity 320ms ease;
-  will-change: transform;
-}
-
 /*
  * The verdict, and the receipt.
  *
@@ -344,6 +335,18 @@ body {
 }
 
 /*
+ * Damage colour without the sting.
+ *
+ * A losing score pop needs `ink-hud-score-neg`'s magenta but NOT its animation:
+ * the pop is already running a flight animation on the elements above it, and
+ * a second one down here would replace the centring transform the number is
+ * positioned with.
+ */
+.ink-hud-damage {
+  color: #ff2d9b;
+}
+
+/*
  * A negative total.
  *
  * It used to turn gold — the same gold as the rare fish and as the points on
@@ -394,4 +397,195 @@ body {
   text-shadow:
     0.28cqw 0.28cqw 0 #ff2d9b,
     0.5cqw 0.5cqw 0 #120a20;
+}
+
+/* ==========================================================================
+   MOTION
+   Durations mirror `CONFIG.motion` in lib/config.ts — keep the two in step.
+
+   Everything here animates TRANSFORM and OPACITY only. `.stamp` animating
+   left/top/width is grandfathered (one element, one shot, on a screen where
+   the game loop is idle) and is not a pattern to copy: during play this app is
+   running a rAF canvas loop AND MediaPipe inference, and a main-thread layout
+   animation competes with both.
+   ========================================================================== */
+
+/*
+ * A score number's flight from the fish to the counter.
+ *
+ * Two nested elements, one per axis: the outer travels X on a near-linear
+ * curve while the inner travels Y on an ease-in. Composing them is what makes
+ * the path a parabola — a single element can only interpolate a straight line
+ * between two translate values, and a number that slides diagonally reads as a
+ * tooltip rather than as something thrown.
+ *
+ * The arc is the whole point of the effect: it is what ties the number to the
+ * fish that earned it. A `+3` that merely appears beside the counter never
+ * teaches where it came from.
+ */
+@keyframes popArcX {
+  from { transform: translateX(0); }
+  to { transform: translateX(var(--pop-dx)); }
+}
+
+@keyframes popArcY {
+  from { transform: translateY(0) scale(0.6); opacity: 0; }
+  12% { transform: translateY(-3cqw) scale(1.15); opacity: 1; }
+  28% { transform: translateY(-4.4cqw) scale(1); opacity: 1; }
+  85% { opacity: 1; }
+  to { transform: translateY(var(--pop-dy)) scale(0.62); opacity: 0; }
+}
+
+/* The counter absorbing one. Overshoot then settle — the number should look
+   struck, not resized. */
+@keyframes scorePunch {
+  0% { transform: scale(1); }
+  30% { transform: scale(1.28); }
+  60% { transform: scale(0.96); }
+  100% { transform: scale(1); }
+}
+
+/*
+ * Bite anticipation.
+ *
+ * The three wind-up ticks were audible only. On a phone at arm's length with
+ * the sound off — which is most of them — the one telegraph the game has was
+ * invisible. A ring closes in from the edge of the frame on each tick, tighter
+ * and brighter each time, so the bite can be anticipated on mute.
+ */
+@keyframes bitePulse {
+  from { opacity: 0; transform: scale(1.06); }
+  30% { opacity: var(--bite-peak, 0.5); }
+  to { opacity: 0; transform: scale(0.985); }
+}
+
+/* ------------------------------------------------------------- transitions */
+
+/*
+ * Screens leave and arrive along the ink's own lean.
+ *
+ * -4deg is the skew already baked into `.ink-title` and the sprite lockups, so
+ * motion on that axis reads as part of the artwork rather than as a UI slide.
+ * Nothing crossfades and nothing slides horizontally like a page: this is a
+ * camera effect, and a page stack is the one metaphor it must not suggest.
+ */
+@keyframes screenOut {
+  from { opacity: 1; transform: translate(0, 0) rotate(0deg); }
+  to { opacity: 0; transform: translate(-6cqw, -14cqw) rotate(-3.5deg); }
+}
+
+@keyframes screenIn {
+  from { opacity: 0; transform: translate(3cqw, 9cqw) rotate(2.5deg); }
+  to { opacity: 1; transform: translate(0, 0) rotate(0deg); }
+}
+
+/* The scrim goes last and on its own, so the panels are seen to leave rather
+   than being hidden by the thing they are leaving through. */
+@keyframes scrimOut {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+/* The clock ring draws itself on rather than appearing complete — the run has
+   not started until the ring is closed. */
+@keyframes ringDraw {
+  from { stroke-dashoffset: var(--ring-c); }
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes hudIn {
+  from { opacity: 0; transform: scale(0.5); }
+  70% { transform: scale(1.08); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes hudOut {
+  from { opacity: 1; transform: scale(1); }
+  to { opacity: 0; transform: scale(0.82); }
+}
+
+/* A hard cut with a punch on the incoming panel. The cut is deliberate — a
+   dissolve mushes at this size — but a cut with NO motion at all is
+   indistinguishable from a dropped frame. */
+@keyframes cutPunch {
+  from { transform: scale(0.94); }
+  60% { transform: scale(1.03); }
+  to { transform: scale(1); }
+}
+
+.motion-screen-out { animation: screenOut 300ms cubic-bezier(0.55, 0, 0.85, 0.3) both; }
+.motion-screen-in { animation: screenIn 340ms cubic-bezier(0.16, 1, 0.3, 1) both; }
+.motion-scrim-out { animation: scrimOut 300ms ease-in 90ms both; }
+.motion-hud-in { animation: hudIn 380ms cubic-bezier(0.22, 1.3, 0.4, 1) both; }
+.motion-hud-out { animation: hudOut 260ms cubic-bezier(0.5, 0, 0.9, 0.4) both; }
+.motion-ring-draw { animation: ringDraw 460ms cubic-bezier(0.3, 0.9, 0.3, 1) both; }
+.motion-cut-punch { animation: cutPunch 220ms cubic-bezier(0.3, 1.4, 0.5, 1); }
+.motion-score-punch { animation: scorePunch 220ms cubic-bezier(0.3, 1.3, 0.5, 1); }
+
+/*
+ * Prints slide across and the focused one comes forward. Transform only, so the
+ * whole carousel stays on the compositor.
+ *
+ * Overshoot on the curve, and the neighbours lag behind the focused one, so the
+ * stack settles like a handful of physical photos rather than three divs moving
+ * in lockstep.
+ */
+.print {
+  transition:
+    transform 380ms cubic-bezier(0.34, 1.42, 0.64, 1),
+    opacity 260ms ease;
+  will-change: transform;
+}
+
+.print-neighbour {
+  transition-delay: 45ms;
+}
+
+/*
+ * Reduced motion.
+ *
+ * A face-tracked camera game asks the player to move their head at a screen
+ * that is also moving; for anyone susceptible that combination is worse than
+ * either alone. The screen-wide motion goes, the ARRIVALS stay as plain fades
+ * so nothing ever teleports, and the game's own canvas VFX are untouched —
+ * they are the game, not chrome.
+ */
+@media (prefers-reduced-motion: reduce) {
+  /* The stage kick is guarded in JS, where it is driven from — see `kickStage`. */
+  .motion-score-punch,
+  .motion-cut-punch {
+    animation: none;
+  }
+
+  .motion-screen-in,
+  .motion-hud-in {
+    animation-name: fadeIn;
+    animation-duration: 160ms;
+  }
+
+  .motion-screen-out,
+  .motion-hud-out {
+    animation-name: fadeOut;
+    animation-duration: 160ms;
+  }
+
+  .print {
+    transition-duration: 160ms;
+    transition-timing-function: ease;
+  }
+
+  .float,
+  .ink-hud-clock-urgent {
+    animation: none;
+  }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes fadeOut {
+  from { opacity: 1; }
+  to { opacity: 0; }
 }

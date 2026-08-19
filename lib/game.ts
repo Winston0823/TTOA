@@ -61,6 +61,26 @@ export interface CatchEntry {
   points: number;
 }
 
+/**
+ * A discrete thing that just happened, for the motion layer to react to.
+ *
+ * `score` carries the SWING, not the total, plus where on the canvas it
+ * happened so the number can fly from the fish to the counter. `tick` is one
+ * of the three wind-up beats before a bite.
+ */
+export type GamePulse =
+  | {
+      kind: "score";
+      /** Points gained or lost by this event. Negative on a swallowed puffer. */
+      points: number;
+      rarity: CatchEntry["rarity"];
+      gulped: boolean;
+      /** Normalised 0..1 against the canvas. */
+      x: number;
+      y: number;
+    }
+  | { kind: "tick"; n: number };
+
 export interface GameSnapshotState {
   phase: Phase;
   timeLeft: number;
@@ -170,6 +190,19 @@ export class Game {
 
   onState: (s: GameSnapshotState) => void = () => {};
 
+  /**
+   * Discrete UI events, as opposed to `onState`'s per-frame snapshot.
+   *
+   * Juice needs to know that a thing HAPPENED and where — a score snapshot only
+   * says what the total is now. Deriving "a fish just scored 3" by diffing
+   * successive snapshots would miss a gulp that replaces a reeled value with an
+   * equal one, and could not tell you where on the stage to put the number.
+   *
+   * Positions are normalised 0..1 against the canvas so the DOM layer never
+   * needs to know the canvas dimensions or how the stage is scaled.
+   */
+  onPulse: (p: GamePulse) => void = () => {};
+
   constructor(private canvas: HTMLCanvasElement) {
     canvas.width = this.w;
     canvas.height = this.h;
@@ -245,38 +278,88 @@ export class Game {
    */
   async initCamera(video: HTMLVideoElement): Promise<boolean> {
     this.video = video;
-    if (!this.tracker) {
-      this.inputMode = "touch";
-      return false;
+
+    // NOTE: camera acquisition no longer depends on the tracker.
+    //
+    // This used to bail out before even asking for the camera if the face model
+    // had not finished downloading, which conflated two unrelated failures: "the
+    // player refused the camera" and "a 3.8MB model is still in flight". The
+    // model is ~6MB of third-party CDN traffic and on a slow phone it is by far
+    // the longest wait in the app — long enough that the run should not be held
+    // for it. So the camera is acquired either way, and the INPUT MODE is
+    // decided at the end from whatever the tracker's state actually is.
+    //
+    // The return value means one thing only: did we get a camera.
+    if (!this.hasLiveCamera(video)) {
+      this.releaseCamera();
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: "user",
+            width: { ideal: 640 },
+            height: { ideal: 480 },
+          },
+          audio: false,
+        });
+        video.srcObject = stream;
+      } catch {
+        this.inputMode = "touch";
+        this.video = null;
+        return false;
+      }
     }
 
-    if (this.hasLiveCamera(video)) {
-      this.inputMode = "face";
-      // An element can be attached to a live track and still be paused, which
-      // freezes `readyState` and starves the tracker of new frames.
-      if (video.paused) await video.play().catch(() => {});
-      return true;
-    }
+    // An element can be attached to a live track and still be paused, which
+    // freezes `readyState` and starves the tracker of new frames.
+    if (video.paused) await video.play().catch(() => {});
+    await this.waitForFirstFrame(video);
 
-    this.releaseCamera();
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: "user",
-          width: { ideal: 640 },
-          height: { ideal: 480 },
-        },
-        audio: false,
-      });
-      video.srcObject = stream;
-      await video.play();
-      this.inputMode = "face";
-      return true;
-    } catch {
-      this.inputMode = "touch";
-      this.video = null;
-      return false;
-    }
+    // Decided here, and re-decided on every run: a player whose first take was
+    // touch-only because the model had not landed gets face control on their
+    // next one without doing anything.
+    this.inputMode = this.tracker ? "face" : "touch";
+    return true;
+  }
+
+  /**
+   * Resolves once the element is actually producing frames.
+   *
+   * `play()` resolving is not the same thing. Until `readyState` reaches
+   * HAVE_CURRENT_DATA with real dimensions, `FaceTracker.detect` quietly returns
+   * its last sample — a centred, `ok: false` value — so the take would begin
+   * with the clock running, the rope frozen mid-screen and nothing responding to
+   * the player's face. On a phone where opening the camera takes a second or
+   * two that is a visible chunk of a thirty-second run, spent looking broken.
+   *
+   * Bounded, because a camera that never delivers a frame must not hang the
+   * start: on timeout the run begins anyway and tracking picks up whenever the
+   * frames do arrive.
+   */
+  private waitForFirstFrame(video: HTMLVideoElement): Promise<void> {
+    const ready = () => video.readyState >= 2 && video.videoWidth > 0;
+    if (ready()) return Promise.resolve();
+
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        cancelAnimationFrame(raf);
+        clearTimeout(timer);
+        resolve();
+      };
+
+      // Polled on rAF rather than waiting on `loadeddata`: the event may already
+      // have fired by the time we subscribe, and a missed event is a hang.
+      let raf = 0;
+      const poll = () => {
+        if (ready()) return finish();
+        raf = requestAnimationFrame(poll);
+      };
+      raf = requestAnimationFrame(poll);
+
+      const timer = setTimeout(finish, CONFIG.camera.firstFrameTimeout);
+    });
   }
 
   get currentInputMode() {
@@ -528,7 +611,13 @@ export class Game {
     const hook = this.rope.hook;
     for (const f of this.fishes) {
       updateFish(f, dt, this.elapsed, hook.x, hook.y, this.w, waterTop, {
-        onTick: (n) => this.audio.tick(n),
+        onTick: (n) => {
+          this.audio.tick(n);
+          // The three ticks are the game's only telegraph. They have always
+          // been audible; this makes them visible too, which matters on a phone
+          // held at arm's length with the sound off.
+          this.pulse({ kind: "tick", n });
+        },
         onMiss: () => {
           // Missing is cheap and quiet. The player is never scored on timing.
           this.audio.thunk();
@@ -630,6 +719,14 @@ export class Game {
     // Keyed by fish id so a later gulp can find this exact entry and flag it.
     this.catches.push({ id: f.id, rarity: f.rarity, gulped: false, points });
     this.hookedFish = null;
+    this.pulse({
+      kind: "score",
+      points,
+      rarity: f.rarity,
+      gulped: false,
+      x: hook.x / this.w,
+      y: hook.y / this.h,
+    });
     this.flashes.push({ x: hook.x, y: hook.y, t: 0, seed: f.id * 0.618 });
     this.addBump(hook.x, 1);
     this.audio.catchSting();
@@ -707,13 +804,27 @@ export class Game {
       // On a puffer that swap is a five-point swing in the wrong direction.
       const eaten = CONFIG.score.eaten[f.rarity];
       const entry = this.catches.find((c) => c.id === f.id);
+      // The DELTA is what flies, not the eaten value. A gulp swaps the reeled
+      // value out rather than stacking on it, so a common going 1 -> 2 is a
+      // `+1` on screen; a puffer going 2 -> -3 is a `-5`. Showing the eaten
+      // value would claim credit the player did not get.
+      let delta = eaten;
       if (entry) {
-        this.score += eaten - entry.points;
+        delta = eaten - entry.points;
+        this.score += delta;
         entry.points = eaten;
         entry.gulped = true;
       } else {
         this.score += eaten;
       }
+      this.pulse({
+        kind: "score",
+        points: delta,
+        rarity: f.rarity,
+        gulped: true,
+        x: m.x / this.w,
+        y: m.y / this.h,
+      });
       this.flashes.push({ x: m.x, y: m.y, t: 0, seed: f.id * 0.618 });
       this.audio.catchSting();
       this.addCapture("gulp", this.funnyScore(dt, payout, "gulp").total);
@@ -891,6 +1002,10 @@ export class Game {
   }
 
   // ---------------------------------------------------------------- state
+  private pulse(p: GamePulse) {
+    this.onPulse(p);
+  }
+
   private emit() {
     this.onState({
       phase: this.phase,

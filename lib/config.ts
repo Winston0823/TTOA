@@ -419,6 +419,46 @@ export const CONFIG = {
     },
   },
 
+  // ---------------------------------------------------------------- camera
+  camera: {
+    /**
+     * How long to wait for the camera's first real frame before starting the
+     * run anyway, in MILLISECONDS.
+     *
+     * Long enough to cover a normal phone opening its camera, short enough that
+     * a camera which never delivers cannot strand the player on the title
+     * screen. Tracking still attaches whenever the frames turn up.
+     */
+    firstFrameTimeout: 2500,
+  },
+
+  // ---------------------------------------------------------------- motion
+  /**
+   * Every duration the motion layer runs on, in MILLISECONDS.
+   *
+   * Here for the same reason every other feel value is: timing is feel. The CSS
+   * owns the curves — a cubic-bezier is not a number you tune from a config —
+   * but anything JS has to wait on lives here, and the two must agree. Where a
+   * keyframe's duration is mirrored in `globals.css` it is named in a comment
+   * on the rule.
+   */
+  motion: {
+    /** Title clears before the run starts, so the clock begins with the HUD. */
+    titleOut: 300,
+    /** The result screen's pieces landing, one after another. */
+    resultStagger: 90,
+    /** How long the HUD hangs around after the run ends, on its way out. */
+    hudOut: 260,
+    /** A score number's flight from the fish to the counter. */
+    popFlight: 620,
+    /** The counter's own punch as it absorbs one. */
+    scorePunch: 220,
+    /** Whole-stage kick on a catch. Small and short — a nudge, not a shake. */
+    stageKick: 190,
+    /** The result total counting up from zero. */
+    countUp: 700,
+  },
+
   // ----------------------------------------------------------- ink palette
   /** Splatoon-ish ink palette. Every colour in the game comes from here. */
   ink: {
@@ -457,9 +497,15 @@ export const CONFIG = {
     /** Alpha of the translucent water layer drawn over the camera feed. */
     alpha: 0.75,
     /** Base amplitude of the undulating waterline, in canvas units. */
-    waveAmplitude: 7,
-    /** Base wavelength of the waterline sine, in canvas units. */
-    waveLength: 260,
+    waveAmplitude: 22,
+    /**
+     * Sine scale, NOT the period — the shape is `sin(x / waveLength)`, so the
+     * period is 2*PI*waveLength. At the old 260 that was ~1634 units across a
+     * 720-wide canvas: less than half a crest, which is why the surface read as
+     * a slowly tilting straight line rather than water. 55 gives a period of
+     * ~345, so a little over two crests are on screen at once.
+     */
+    waveLength: 55,
     /** Waterline scroll speed. */
     waveSpeed: 0.55,
     /** Peak extra amplitude of a reactive bump (fish pass / catch landed). */
@@ -468,6 +514,31 @@ export const CONFIG = {
     bumpDecay: 0.85,
     /** Horizontal falloff of a bump, in canvas units. */
     bumpWidth: 130,
+    /**
+     * Spacing of the surface samples that get joined by straight segments.
+     * The sine underneath is untouched — faceting is purely a paint decision,
+     * so the physics and the drawn crest never disagree — but sampling coarsely
+     * and connecting with lines gives the hand-cut edge the sprites have.
+     * Drop it toward 8 and the surface goes back to a smooth machine curve.
+     */
+    facet: 40,
+    /** Stencil outline on the waterline. Matches the sprites' ink edge. */
+    surfaceOutline: 23,
+    /** Flat neon core drawn inside that outline. No glow pass. */
+    surfaceWidth: 9,
+    /**
+     * Depth of the flat shallow band under the surface. Posterised depth:
+     * two hard steps instead of a ramp, because the style forbids gradients.
+     */
+    shallowBand: 54,
+    /** Fraction of the water column painted as the flat deep band. */
+    deepBand: 0.42,
+    /** Hard-edged caustic chevrons. Rows, alpha and stroke weight. */
+    causticRows: 3,
+    causticAlpha: 0.11,
+    causticWidth: 9,
+    /** Horizontal pitch of one caustic zigzag tooth. */
+    causticPitch: 96,
     /**
      * Opacity of submerged fish. Deliberately NOT a canvas blur — `ctx.filter`
      * is catastrophically slow on mobile Safari at this canvas size.

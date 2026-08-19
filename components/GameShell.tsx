@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CONFIG } from "@/lib/config";
 import { archetypeFor, tallyLine } from "@/lib/archetype";
 import { sharePolaroid } from "@/lib/share";
-import type { Capture, CatchEntry, Game, GameSnapshotState } from "@/lib/game";
+import type { Capture, CatchEntry, Game, GamePulse, GameSnapshotState } from "@/lib/game";
 
 type Loading = "idle" | "loading" | "ready" | "failed";
 
@@ -38,6 +38,166 @@ const STAMP: Record<Capture["kind"], { label: string; src: string }> = {
   tug: { label: "Head tug", src: "/assets/stamp_tug.webp" },
 };
 
+const M = CONFIG.motion;
+
+/**
+ * Keeps a screen mounted for `ms` after it stops being active, so it can play
+ * an exit rather than vanishing on the frame the phase flips.
+ *
+ * Returns `"in"` while active, `"out"` during the grace period, and `null` once
+ * it should really be gone. Two of the three phase changes are user-initiated
+ * and can simply be sequenced by hand in the handler; this exists for the one
+ * that is not — the run ending on its own clock, deep inside the game loop.
+ */
+function useExitLatch(active: boolean, ms: number): "in" | "out" | null {
+  const [state, setState] = useState<"in" | "out" | null>(active ? "in" : null);
+
+  useEffect(() => {
+    if (active) {
+      setState("in");
+      return;
+    }
+    // `setState` in the cleanup-free branch would strand a screen that was
+    // never shown, so only latch out if something was actually on screen.
+    let cancelled = false;
+    setState((prev) => (prev === null ? null : "out"));
+    const id = setTimeout(() => {
+      if (!cancelled) setState(null);
+    }, ms);
+    return () => {
+      cancelled = true;
+      clearTimeout(id);
+    };
+  }, [active, ms]);
+
+  return state;
+}
+
+/**
+ * Counts a number up from zero.
+ *
+ * The result total should be watched arriving, not read on arrival — the number
+ * is the whole verdict of the run, and a value that is simply present when the
+ * screen appears is the one thing on this screen with no moment of its own.
+ *
+ * Eased out, so it sprints and then lands rather than crawling linearly to the
+ * final digit. Negative totals count DOWN through zero for the same reason.
+ */
+function useCountUp(target: number, ms: number, enabled: boolean): number {
+  const [value, setValue] = useState(enabled ? 0 : target);
+
+  useEffect(() => {
+    if (!enabled) {
+      setValue(target);
+      return;
+    }
+    if (target === 0) {
+      setValue(0);
+      return;
+    }
+    let raf = 0;
+    let start: number | null = null;
+    const step = (ts: number) => {
+      if (start === null) start = ts;
+      const t = Math.min(1, (ts - start) / ms);
+      const eased = 1 - Math.pow(1 - t, 3);
+      setValue(Math.round(target * eased));
+      if (t < 1) raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [target, ms, enabled]);
+
+  return value;
+}
+
+/** True when the OS asks for less motion. Read once — it is not a live toggle. */
+function useReducedMotion(): boolean {
+  const [reduced, setReduced] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    setReduced(mq.matches);
+  }, []);
+  return reduced;
+}
+
+/** A score number in flight, from where it was earned to the counter. */
+type Pop = { id: number; points: number; x: number; y: number };
+
+/**
+ * Where a pop is heading: the centre of the HUD score.
+ *
+ * X is in cqw; Y is too, which is why it looks small — the stage is 9:16, so
+ * the full height is 177.8cqw and the counter's centre sits about 26 of them
+ * down. Measured against the same safe-zone percentages the counter is laid out
+ * with, rather than read from the DOM: a `getBoundingClientRect` per catch is a
+ * forced layout in the one moment of the run that has to hold 60fps.
+ */
+const POP_TARGET_X = 90;
+const POP_TARGET_Y = 26;
+/** The stage is 9:16, so 100cqw of width is 177.8cqw of height. */
+const STAGE_H_CQW = (100 * 16) / 9;
+
+/**
+ * Score numbers in flight, from the fish that earned them to the counter.
+ *
+ * Four nested elements, and each layer exists because a CSS animation REPLACES
+ * the element's whole `transform` for as long as it runs:
+ *
+ *   1. position — `left`/`top` percentages, NOT a transform. Putting the start
+ *      point in `transform` meant the keyframe overwrote it the instant the
+ *      animation began, and every number jumped to the stage's top-left corner
+ *      before flying off from there.
+ *   2. the X leg of the arc.
+ *   3. the Y leg. Splitting the axes across two elements, each with its own
+ *      easing, is what makes the path a parabola — one element can only tween a
+ *      straight line between two translates, which reads as a tooltip sliding
+ *      rather than as something thrown.
+ *   4. centring on the point, which has to live below both animations for the
+ *      same overwrite reason.
+ */
+function ScorePops({ pops }: { pops: Pop[] }) {
+  return (
+    <>
+      {pops.map((p) => {
+        const fromX = p.x * 100;
+        const fromY = p.y * STAGE_H_CQW;
+        return (
+          <span
+            key={p.id}
+            className="absolute block"
+            style={{ left: `${p.x * 100}%`, top: `${p.y * 100}%` }}
+          >
+            <span
+              className="block will-change-transform"
+              style={{
+                animation: `popArcX ${M.popFlight}ms cubic-bezier(0.4, 0, 0.7, 0.5) forwards`,
+                ["--pop-dx" as string]: `${POP_TARGET_X - fromX}cqw`,
+              }}
+            >
+              <span
+                className="block"
+                style={{
+                  animation: `popArcY ${M.popFlight}ms cubic-bezier(0.3, 0, 0.6, 1) forwards`,
+                  ["--pop-dy" as string]: `${POP_TARGET_Y - fromY}cqw`,
+                }}
+              >
+                <span
+                  className={`ink-hud block -translate-x-1/2 -translate-y-1/2 whitespace-nowrap text-[7cqw] leading-none ${
+                    p.points < 0 ? "ink-hud-damage" : "ink-hud-score"
+                  }`}
+                >
+                  {p.points > 0 ? `+${p.points}` : p.points}
+                </span>
+              </span>
+            </span>
+          </span>
+        );
+      })}
+    </>
+  );
+}
+
 export default function GameShell() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -46,6 +206,96 @@ export default function GameShell() {
   const [state, setState] = useState<GameSnapshotState>(INITIAL);
   const [loading, setLoading] = useState<Loading>("idle");
   const [cameraDenied, setCameraDenied] = useState(false);
+
+  // ---- motion ---------------------------------------------------------------
+  const reduced = useReducedMotion();
+  /** Numbers currently in flight from a fish to the counter. */
+  const [pops, setPops] = useState<Pop[]>([]);
+  /** The stage, kicked imperatively on a catch — see the note on the element. */
+  const stageRef = useRef<HTMLDivElement>(null);
+  /** The wind-up beat that last fired, or null. Keyed so each one replays. */
+  const [bite, setBite] = useState<{ id: number; n: number } | null>(null);
+  /**
+   * The start sequence.
+   *
+   *   idle     — the title, waiting to be tapped
+   *   clearing — the title is animating out while the camera is being opened
+   *   waiting  — the title is gone and the camera is STILL not producing frames
+   *
+   * The third state exists because the exit is 300ms and opening a camera on a
+   * mid-range Android is routinely 1-3 SECONDS. Without it the animation
+   * finishes into an empty stage and the player is looking at nothing, which is
+   * a worse answer than the hitch it replaced.
+   */
+  const [starting, setStarting] = useState<"idle" | "clearing" | "waiting">("idle");
+  const titleLeaving = starting !== "idle";
+  const [resultLeaving, setResultLeaving] = useState(false);
+  const popId = useRef(0);
+
+  /**
+   * The whole-stage kick on a catch.
+   *
+   * Deliberately tiny — 1.2% and a hair of rotation. A real shake, on a camera
+   * feed the player is simultaneously trying to aim their face at, is nausea
+   * rather than impact.
+   *
+   * Driven through the Web Animations API rather than a CSS class because a
+   * finished CSS animation does not replay just because its class is still
+   * applied, and the usual fix — changing the element's key — would remount the
+   * canvas and the video out from under the engine. `animate()` always starts
+   * fresh and leaves the tree alone.
+   *
+   * `container-type: inline-size` on this element is unaffected: cqw resolves
+   * against the content box, which a transform does not change.
+   */
+  const kickStage = useCallback(() => {
+    const el = stageRef.current;
+    if (!el || reduced || typeof el.animate !== "function") return;
+    el.animate(
+      [
+        { transform: "scale(1) rotate(0deg)" },
+        { transform: "scale(1.012) rotate(-0.22deg)", offset: 0.35 },
+        { transform: "scale(0.997) rotate(0.1deg)", offset: 0.7 },
+        { transform: "scale(1) rotate(0deg)" },
+      ],
+      { duration: M.stageKick, easing: "cubic-bezier(0.3, 1.2, 0.5, 1)" }
+    );
+  }, [reduced]);
+
+  /** Turns a game event into motion. */
+  const handlePulse = useCallback((p: GamePulse) => {
+    if (p.kind === "tick") {
+      setBite({ id: popId.current++, n: p.n });
+      return;
+    }
+
+    // A zero-point event still happened, but a floating `+0` is noise.
+    if (p.points !== 0) {
+      const id = popId.current++;
+      setPops((prev) => [...prev, { id, points: p.points, x: p.x, y: p.y }]);
+      // Culled on a timer rather than `onAnimationEnd`: a backgrounded tab
+      // never fires the event, and the list would grow for as long as it
+      // stayed hidden.
+      window.setTimeout(() => {
+        setPops((prev) => prev.filter((q) => q.id !== id));
+      }, M.popFlight + 80);
+    }
+
+    // The kick is for landing a fish, not for the sting of eating a puffer —
+    // a hit you regret should not feel like an impact you earned.
+    if (p.points > 0) kickStage();
+  }, [kickStage]);
+
+  /**
+   * The engine is constructed once, in a mount-only effect, so it cannot hold
+   * `handlePulse` directly: that would freeze the first render's closure, and
+   * this one closes over `reduced`. It calls through this ref instead, which is
+   * kept pointed at the current handler.
+   */
+  const pulseRef = useRef(handlePulse);
+  useEffect(() => {
+    pulseRef.current = handlePulse;
+  }, [handlePulse]);
 
   // ---- boot: construct the engine and preload MediaPipe on the title screen
   useEffect(() => {
@@ -62,6 +312,7 @@ export default function GameShell() {
 
       game = new GameCtor(canvas);
       game.onState = (s) => setState(s);
+      game.onPulse = (p) => pulseRef.current(p);
       gameRef.current = game;
       game.start();
 
@@ -110,25 +361,67 @@ export default function GameShell() {
   }, []);
 
   // ---- start ---------------------------------------------------------------
+  /**
+   * Tap → clear the title → wait for the camera → start the run.
+   *
+   * Three things are deliberately ordered here.
+   *
+   * The run starts LAST. It used to start the instant the phase flipped, which
+   * meant the clock could be running behind a title screen the player could
+   * still see, and — worse — against a camera that had not produced a frame
+   * yet, so the rope sat frozen and unresponsive while the take burned down.
+   *
+   * The camera is opened in PARALLEL with the exit, so a fast phone hides the
+   * whole thing behind the animation.
+   *
+   * And nothing here waits for the face model. It is ~6MB from two third-party
+   * CDNs and the single longest wait in the app; holding the button for it made
+   * a slow network look like a broken camera. Touch is a complete way to play,
+   * so the run starts without it and `initCamera` decides the input mode from
+   * whatever has actually landed by then.
+   */
   const handleStart = useCallback(async () => {
     const game = gameRef.current;
     const video = videoRef.current;
-    if (!game || !video) return;
+    if (!game || !video || starting !== "idle") return;
+
+    setStarting("clearing");
 
     // Camera + audio must both be kicked off inside this gesture for iOS.
-    const gotCamera = await game.initCamera(video);
+    let cameraDone = false;
+    const camera = game.initCamera(video).then((ok) => {
+      cameraDone = true;
+      return ok;
+    });
+    const cleared = new Promise<void>((r) => setTimeout(r, reduced ? 0 : M.titleOut));
+
+    // Only admit to waiting if the exit finishes first — otherwise a camera
+    // that came up in 200ms would flash the indicator for a single frame.
+    cleared.then(() => {
+      if (!cameraDone) setStarting("waiting");
+    });
+
+    const [gotCamera] = await Promise.all([camera, cleared]);
     setCameraDenied(!gotCamera);
     await game.startRun();
-  }, []);
+    setStarting("idle");
+  }, [reduced, starting]);
 
   // Go Again lands on the title screen rather than straight into a run. It is
   // the only place the how-to loop lives, so a player who missed a step gets to
   // re-read it — and routing through Start Fishing means the next run always
   // re-acquires the camera inside a fresh user gesture.
   const handleGoAgain = useCallback(() => {
-    setCameraDenied(false);
-    gameRef.current?.backToTitle();
-  }, []);
+    setResultLeaving(true);
+    window.setTimeout(
+      () => {
+        setCameraDenied(false);
+        gameRef.current?.backToTitle();
+        setResultLeaving(false);
+      },
+      reduced ? 0 : M.titleOut
+    );
+  }, [reduced]);
 
   const timePct = Math.max(0, state.timeLeft / CONFIG.runDuration);
   const archetype = useMemo(
@@ -142,9 +435,39 @@ export default function GameShell() {
     [state.caught, state.caughtRare, state.gulps, state.score]
   );
 
+  // The HUD is the one screen whose exit is not user-initiated — the run ends on
+  // its own clock, inside the game loop — so it is the one that needs latching
+  // to survive its own unmount long enough to leave.
+  const hud = useExitLatch(state.phase === "playing", M.hudOut);
+
+  // Counts up only while the result is actually on screen, so a re-render on
+  // the title screen does not quietly restart it from zero.
+  const shownScore = useCountUp(
+    state.score,
+    M.countUp,
+    state.phase === "result" && !reduced && !resultLeaving
+  );
+
   return (
     <div className="stage">
-      <div className="stage-inner">
+      {/*
+        NEVER key this element.
+
+        The kick has to replay on every catch, and the usual way to restart a
+        finished CSS animation is to change the element's key — but keying this
+        one remounts the whole subtree, and two of its children are held by
+        direct reference outside React: the engine keeps the `<canvas>` and its
+        2D context from construction, and the camera stream is attached to the
+        `<video>`. A remount hands React a fresh canvas while the game carries on
+        drawing into the detached original, so the stage goes black with the HUD
+        still live on top of it, and the camera feed is orphaned at the same
+        time.
+
+        The kick is driven imperatively through the Web Animations API instead —
+        see `kickStage`. `element.animate()` always starts a new animation, so it
+        needs no retrigger hack and touches nothing in the tree.
+      */}
+      <div ref={stageRef} className="stage-inner">
         <canvas
           ref={canvasRef}
           className="stage-canvas"
@@ -163,15 +486,42 @@ export default function GameShell() {
           autoPlay
         />
 
+        {/* ------------------------------------------------- SCORE POPS */}
+        {/* Outside the HUD block: a number thrown on the last frame of a run
+            should finish its flight, not be cut off by the clock hitting zero. */}
+        <div className="pointer-events-none absolute inset-0 overflow-hidden">
+          <ScorePops pops={pops} />
+        </div>
+
+        {/* --------------------------------------------- BITE ANTICIPATION */}
+        {bite && state.phase === "playing" && (
+          <span
+            key={bite.id}
+            aria-hidden
+            className="pointer-events-none absolute inset-0"
+            style={{
+              // Tighter and brighter on each of the three beats, so the third —
+              // the one the catch window opens on — is the loudest.
+              ["--bite-peak" as string]: `${0.22 + bite.n * 0.16}`,
+              boxShadow: `inset 0 0 ${14 - bite.n * 3}cqw ${
+                2 + bite.n
+              }cqw rgba(141, 232, 255, 0.55)`,
+              animation: "bitePulse 300ms ease-out forwards",
+            }}
+          />
+        )}
+
         {/* ---------------------------------------------------------- HUD */}
-        {state.phase === "playing" && (
+        {hud && (
           <>
             {/* Clock and score both live in the visual-content zone:
                 informational, and tolerant of edge occlusion. Opposite corners,
                 because they answer different questions — how long is left, and
                 how you are doing — and a player scanning for one should never
                 have to read past the other. */}
-            <div className="safe-visual">
+            <div
+              className={`safe-visual ${hud === "out" ? "motion-hud-out" : "motion-hud-in"}`}
+            >
               <RecordRing pct={timePct} secondsLeft={state.timeLeft} />
               <ScoreCounter score={state.score} />
             </div>
@@ -179,7 +529,7 @@ export default function GameShell() {
             {/* Submerged outranks the mouth hint: while the player's face is
                 under the waterline nothing they do with their mouth can land a
                 fish, so telling them to open it would be actively misleading. */}
-            {state.submerged ? (
+            {state.phase === "playing" && state.submerged ? (
               <div className="safe-core pointer-events-none flex items-end justify-center pb-2">
                 <p className="float rounded-full bg-splat px-5 py-3 text-center text-base font-bold text-foam">
                   {state.inputMode === "face"
@@ -188,6 +538,7 @@ export default function GameShell() {
                 </p>
               </div>
             ) : (
+              state.phase === "playing" &&
               state.showMouthHint && (
                 <div className="safe-core pointer-events-none flex items-end justify-center pb-2">
                   <p className="float rounded-full bg-void/75 px-5 py-3 text-center text-base font-semibold text-foam ring-1 ring-surface/30 backdrop-blur-sm">
@@ -203,7 +554,11 @@ export default function GameShell() {
 
         {/* -------------------------------------------------------- TITLE */}
         {state.phase === "title" && (
-          <div className="absolute inset-0 bg-void/85 backdrop-blur-[3px]">
+          <div
+            className={`absolute inset-0 bg-void/85 backdrop-blur-[3px] ${
+              titleLeaving ? "motion-scrim-out" : ""
+            }`}
+          >
             {/*
               Laid out against the PRE-RECORD safe zone, not the recording one
               the HUD and the result card use. Everything on this screen has to
@@ -216,7 +571,11 @@ export default function GameShell() {
               to absorb slack, so the legend and the CTA keep their space on a
               short stage and the how-to art gives ground instead.
             */}
-            <div className="absolute inset-x-[var(--pre-x)] top-0 bottom-[var(--pre-bottom)] grid grid-rows-[24.9cqw_minmax(0,1fr)_auto] gap-[2.8cqw] text-center">
+            <div
+              className={`absolute inset-x-[var(--pre-x)] top-0 bottom-[var(--pre-bottom)] grid grid-rows-[24.9cqw_minmax(0,1fr)_auto] gap-[2.8cqw] text-center ${
+                titleLeaving ? "motion-screen-out" : "motion-screen-in"
+              }`}
+            >
               {/*
                 The title is artwork, not set type — the lockup carries its own
                 ink outline, cream inner stroke and spark marks, and a lean that
@@ -252,31 +611,50 @@ export default function GameShell() {
                 </section>
 
                 <div>
-                  {loading === "loading" && (
-                    <div className="flex flex-col items-center gap-[1.2cqw] py-[1.6cqw]">
-                      <div className="h-[1cqw] w-[26cqw] overflow-hidden rounded-full bg-foam/15">
-                        <div className="h-full w-1/3 animate-[floatY_1.2s_ease-in-out_infinite] rounded-full bg-surface" />
-                      </div>
-                      <p className="text-[2.4cqw] text-foam/50">Loading face tracking…</p>
-                    </div>
-                  )}
-
+                  {/*
+                    The button is ALWAYS here now. It used to be replaced by a
+                    "Loading face tracking…" bar until ~6MB of WASM and model had
+                    come down from two third-party CDNs — which on a slow phone
+                    is fifteen seconds of dead screen, and reads as the camera
+                    being broken rather than as a download in progress. Dragging
+                    is a complete way to play, so the wait is optional and the
+                    note below says what starting early costs.
+                  */}
                   {loading === "failed" && (
                     <p className="mb-[1.6cqw] text-[2.4cqw] text-gold/85">
                       Face tracking unavailable — you can play by dragging instead.
                     </p>
                   )}
 
-                  {(loading === "ready" || loading === "failed") && (
-                    <StartButton onClick={handleStart} />
-                  )}
+                  <StartButton onClick={handleStart} />
 
-                  <p className="mt-[0.7cqw] text-[2.3cqw] text-foam/40">
-                    {CONFIG.runDuration}-second take
-                  </p>
+                  {loading === "loading" ? (
+                    <p className="mt-[0.7cqw] text-[2.3cqw] text-surface/70">
+                      Still loading face tracking — start now and drag to fish
+                    </p>
+                  ) : (
+                    <p className="mt-[0.7cqw] text-[2.3cqw] text-foam/40">
+                      {CONFIG.runDuration}-second take
+                    </p>
+                  )}
                 </div>
               </div>
             </div>
+
+            {/*
+              Opening a camera is 1-3 seconds on a lot of phones. The exit is
+              300ms, so on those phones the animation lands on an empty stage —
+              and an empty stage right after a tap reads as a crash. The scrim
+              and the panels have animated away by now, so this sits over the
+              live feed as it comes up rather than over a dead screen.
+            */}
+            {starting === "waiting" && (
+              <div className="motion-screen-in absolute inset-0 grid place-items-center">
+                <p className="rounded-full bg-void/80 px-[4cqw] py-[2.4cqw] text-[3cqw] font-black uppercase tracking-wide text-foam ring-1 ring-surface/25 backdrop-blur-sm">
+                  Waking the camera…
+                </p>
+              </div>
+            )}
           </div>
         )}
 
@@ -295,7 +673,11 @@ export default function GameShell() {
                 header and the CTA always keep their space. Under flex the
                 carousel could out-grow its share on a short stage and push the
                 button out of view — which is what made it flicker. */}
-            <div className="absolute inset-x-[var(--core-x)] top-[var(--core-top)] bottom-[var(--core-bottom)] grid grid-rows-[auto_minmax(0,1fr)_auto]">
+            <div
+              className={`absolute inset-x-[var(--core-x)] top-[var(--core-top)] bottom-[var(--core-bottom)] grid grid-rows-[auto_minmax(0,1fr)_auto] ${
+                resultLeaving ? "motion-screen-out" : "motion-screen-in"
+              }`}
+            >
             {/*
               The score leads, and everything under it is a caption on it.
 
@@ -320,7 +702,7 @@ export default function GameShell() {
                   minus. The unit is a label on the number, not a value beside
                   it, and stacking says that more plainly than a size jump on
                   the same line did. */}
-              <p className="ink-tally text-[17cqw] leading-[0.82]">{state.score}</p>
+              <p className="ink-tally text-[17cqw] leading-[0.82]">{shownScore}</p>
               <p className="ink-tally mt-[0.6cqw] text-[4.4cqw] leading-none">
                 {Math.abs(state.score) === 1 ? "pt" : "pts"}
               </p>
@@ -409,6 +791,8 @@ type Swipe = { id: number; x: number; y: number; axis: "none" | "x" };
 
 function HowToPlay() {
   const [step, setStep] = useState(0);
+  /** Whether the panel that just became current still owes its punch. */
+  const [punching, setPunching] = useState(false);
   const [hasArt, setHasArt] = useState(true);
   const [drag, setDrag] = useState(0);
   const [dragging, setDragging] = useState(false);
@@ -421,6 +805,10 @@ function HowToPlay() {
   const probe = useRef<HTMLImageElement>(null);
   const stage = useRef<HTMLDivElement>(null);
   const swipe = useRef<Swipe | null>(null);
+
+  useEffect(() => {
+    setPunching(true);
+  }, [step]);
 
   const nudge = useCallback((dir: number) => {
     setBeat((b) => b + 1);
@@ -549,7 +937,18 @@ function HowToPlay() {
               transform: `translateX(${drag * 0.28}px)`,
               transition: drag ? "none" : "transform 180ms ease-out",
             }}
-            className="absolute inset-0 mx-auto h-full w-auto max-w-full object-contain drop-shadow-[0_4px_10px_rgba(0,0,0,0.5)]"
+            // The cut stays a cut — a dissolve mushes at this size — but a cut
+            // with NO motion at all is indistinguishable from a dropped frame,
+            // so the incoming panel gets a scale punch.
+            //
+            // Retriggered by moving the class rather than by re-keying: these
+            // seven images stay mounted precisely so the browser decodes them
+            // once up front, and a changing key would remount and re-decode the
+            // one panel the player is looking at.
+            className={`absolute inset-0 mx-auto h-full w-auto max-w-full object-contain drop-shadow-[0_4px_10px_rgba(0,0,0,0.5)] ${
+              i === step && punching ? "motion-cut-punch" : ""
+            }`}
+            onAnimationEnd={() => setPunching(false)}
             onError={i === 0 ? () => setHasArt(false) : undefined}
           />
         ))}
@@ -699,7 +1098,12 @@ function RecordRing({ pct, secondsLeft }: { pct: number; secondsLeft: number }) 
             stroke="rgba(242,236,255,0.22)"
             strokeWidth="9"
           />
+          {/* The depleting arc, which on the first frame of a run also draws
+              itself closed — the take has not started until the ring is whole.
+              `--ring-c` hands the circumference to the keyframe, which cannot
+              read it from the attribute. */}
           <circle
+            className="motion-ring-draw"
             cx="50"
             cy="50"
             r={R}
@@ -709,6 +1113,7 @@ function RecordRing({ pct, secondsLeft }: { pct: number; secondsLeft: number }) 
             strokeLinecap="round"
             strokeDasharray={C}
             strokeDashoffset={C * (1 - pct)}
+            style={{ ["--ring-c" as string]: C }}
           />
         </svg>
         <span
@@ -747,15 +1152,26 @@ function RecordRing({ pct, secondsLeft }: { pct: number; secondsLeft: number }) 
 function ScoreCounter({ score }: { score: number }) {
   return (
     <div className="pointer-events-none absolute right-0 top-0 text-right">
-      <span
-        // Keyed on the sign so the sting replays on the transition into
-        // negative rather than only on mount.
-        key={score < 0 ? "neg" : "pos"}
-        className={`ink-hud block text-[12cqw] leading-[0.9] ${
-          score < 0 ? "ink-hud-score-neg" : "ink-hud-score"
-        }`}
-      >
-        {score}
+      {/*
+        Two nested elements because two animations have to run at once and CSS
+        gives an element one `animation` property. The outer one is struck every
+        time the value changes; the inner carries the sting on a swing into
+        negative. Nesting also keeps the punch's `scale` from being composed
+        away by the sting's `translateX`.
+
+        Both are keyed, not classed: an animation that has already finished does
+        not replay because a class is still present, so the key is what makes
+        the second catch move at all.
+      */}
+      <span key={`punch-${score}`} className="motion-score-punch block origin-top-right">
+        <span
+          key={score < 0 ? "neg" : "pos"}
+          className={`ink-hud block text-[12cqw] leading-[0.9] ${
+            score < 0 ? "ink-hud-score-neg" : "ink-hud-score"
+          }`}
+        >
+          {score}
+        </span>
       </span>
     </div>
   );
@@ -878,7 +1294,9 @@ function PhotoCarousel({
           return (
             <div
               key={c.id}
-              className="print absolute inset-0 grid place-items-center"
+              className={`print absolute inset-0 grid place-items-center ${
+                active ? "" : "print-neighbour"
+              }`}
               style={{
                 transform: `translateX(${offset * 70}%) scale(${active ? 1 : 0.82})`,
                 opacity: Math.abs(offset) > 1 ? 0 : active ? 1 : 0.45,

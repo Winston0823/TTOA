@@ -82,50 +82,95 @@ export function drawWaterLayer(
   elapsed: number,
   bumps: WaterBump[]
 ) {
-  // Sample the surface ONCE per frame and reuse the points for the fill and
-  // both strokes. Recomputing the sine + every active bump three times per
-  // frame was pure waste.
-  const STEP = 8;
-  const pts: number[] = [];
-  for (let x = 0; x <= w; x += STEP) pts.push(waterlineY(x, baseY, elapsed, bumps));
+  const { facet, surfaceOutline, surfaceWidth, shallowBand, deepBand, alpha } =
+    CONFIG.water;
 
-  const tracePath = () => {
+  // Sample the surface ONCE per frame and reuse the points for every fill and
+  // stroke below. Recomputing the sine + every active bump per pass was pure
+  // waste. Sampling at `facet` rather than every few pixels is the style
+  // decision: straight segments between coarse samples give the hand-cut crest
+  // the sprites have, while still passing exactly through the true surface at
+  // each vertex — so nothing the player can feel changes.
+  const xs: number[] = [];
+  const ys: number[] = [];
+  for (let x = 0; x < w; x += facet) {
+    xs.push(x);
+    ys.push(waterlineY(x, baseY, elapsed, bumps));
+  }
+  xs.push(w);
+  ys.push(waterlineY(w, baseY, elapsed, bumps));
+
+  const trace = () => {
     ctx.beginPath();
-    ctx.moveTo(0, pts[0]);
-    for (let i = 1; i < pts.length; i++) ctx.lineTo(i * STEP, pts[i]);
+    ctx.moveTo(xs[0], ys[0]);
+    for (let i = 1; i < xs.length; i++) ctx.lineTo(xs[i], ys[i]);
   };
 
   ctx.save();
-  tracePath();
+  // Miter, not round: round joins sand the corners off and the crest goes soft.
+  ctx.lineJoin = "miter";
+  ctx.miterLimit = 2;
+  ctx.lineCap = "butt";
+
+  ctx.globalAlpha = alpha;
+
+  // --- body: one flat colour, no ramp -------------------------------------
+  trace();
   ctx.lineTo(w, h);
   ctx.lineTo(0, h);
   ctx.closePath();
-
-  const g = ctx.createLinearGradient(0, baseY, 0, h);
-  g.addColorStop(0, INK.waterTop);
-  g.addColorStop(0.45, INK.waterMid);
-  g.addColorStop(1, INK.waterDeep);
-  ctx.globalAlpha = CONFIG.water.alpha;
-  ctx.fillStyle = g;
+  ctx.fillStyle = INK.waterMid;
   ctx.fill();
+
+  // --- flat deep band, hard step ------------------------------------------
+  // Its top edge gets its own lazy facetted wave. A dead-straight rule across
+  // the full width reads as a seam in the artwork; the step should look cut by
+  // the same hand as the crest.
+  const deepTop = h - (h - baseY) * deepBand;
+  ctx.beginPath();
+  ctx.moveTo(0, deepTop);
+  for (let x = 0; x <= w; x += facet * 2) {
+    ctx.lineTo(x, deepTop + Math.sin(x / 88 - elapsed * 0.22) * 16);
+  }
+  ctx.lineTo(w, h);
+  ctx.lineTo(0, h);
+  ctx.closePath();
+  ctx.fillStyle = INK.waterDeep;
+  ctx.fill();
+
+  // --- flat shallow band, hugging the crest --------------------------------
+  trace();
+  for (let i = xs.length - 1; i >= 0; i--) ctx.lineTo(xs[i], ys[i] + shallowBand);
+  ctx.closePath();
+  ctx.fillStyle = INK.waterTop;
+  ctx.fill();
+
   ctx.globalAlpha = 1;
 
-  // Neon surface line, doubled: a soft glow under a crisp core.
-  ctx.lineJoin = "round";
+  // --- stencil outline, then flat neon core --------------------------------
+  // Same paint order as every sprite: the ink edge goes down first and the
+  // colour sits inside it. No glow pass — a soft halo is exactly the "soft
+  // shading" the locked style rules out.
+  trace();
+  ctx.strokeStyle = INK.ropeOutline;
+  ctx.lineWidth = surfaceOutline;
+  ctx.stroke();
+
+  trace();
   ctx.strokeStyle = INK.surface;
-  tracePath();
-  ctx.globalAlpha = 0.18;
-  ctx.lineWidth = 11;
+  ctx.lineWidth = surfaceWidth;
   ctx.stroke();
-  tracePath();
-  ctx.globalAlpha = 0.95;
-  ctx.lineWidth = 3.5;
-  ctx.stroke();
-  ctx.globalAlpha = 1;
+
   ctx.restore();
 }
 
-/** Procedural caustic bands, drawn over the water layer at low alpha. */
+/**
+ * Caustics as hard-edged chevrons rather than soft bands.
+ *
+ * The old version was five wide, low-alpha sine strokes — readable as light,
+ * but it was airbrush, and the rest of the screen is stencil. Straight
+ * segments at a flat alpha say the same thing in the right accent.
+ */
 export function drawCaustics(
   ctx: CanvasRenderingContext2D,
   w: number,
@@ -133,17 +178,29 @@ export function drawCaustics(
   baseY: number,
   elapsed: number
 ) {
+  const { causticRows, causticAlpha, causticWidth, causticPitch } = CONFIG.water;
   ctx.save();
-  ctx.globalAlpha = 0.09;
+  ctx.globalAlpha = causticAlpha;
   ctx.strokeStyle = INK.caustic;
-  ctx.lineWidth = 14;
-  for (let i = 0; i < 5; i++) {
-    const y = baseY + 70 + i * ((h - baseY) / 5);
+  ctx.lineWidth = causticWidth;
+  ctx.lineJoin = "miter";
+  ctx.miterLimit = 2;
+  ctx.lineCap = "butt";
+
+  const span = h - baseY;
+  for (let i = 0; i < causticRows; i++) {
+    // Drift each row at its own rate so the set never reads as one rigid comb.
+    const drift = Math.sin(elapsed * 0.5 + i * 1.3) * 14;
+    // Uneven row spacing and a per-row pitch stretch: evenly spaced teeth of
+    // identical width stop reading as light and start reading as a comb.
+    const y = baseY + span * (0.24 + (i * 0.66) / causticRows) + (i % 2 ? 13 : 0);
+    const pitch = causticPitch * (1 + i * 0.24);
     ctx.beginPath();
-    for (let x = 0; x <= w; x += 14) {
-      const yy = y + Math.sin(x / 90 + elapsed * 0.8 + i * 1.4) * 11;
-      if (x === 0) ctx.moveTo(x, yy);
-      else ctx.lineTo(x, yy);
+    let tooth = 0;
+    for (let x = -pitch; x <= w + pitch; x += pitch, tooth++) {
+      const yy = y + ((tooth + i) % 2 === 0 ? -1 : 1) * causticWidth * 1.6;
+      if (tooth === 0) ctx.moveTo(x + drift, yy);
+      else ctx.lineTo(x + drift, yy);
     }
     ctx.stroke();
   }

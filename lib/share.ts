@@ -25,8 +25,54 @@ const WELL = "#d9d9d9";
 /** Same stack the DOM uses, so the print matches what was on screen. */
 const FONT = '"SF Pro Rounded", ui-rounded, Nunito, system-ui, sans-serif';
 
+/**
+ * The HUD face, resolved at runtime.
+ *
+ * `next/font` hashes the family name at build time, so it cannot be hardcoded —
+ * but it publishes the real name on `--font-hud`, and that variable is a valid
+ * font-family list, so canvas can use it verbatim. Falls back to the UI stack
+ * if the variable is missing, which keeps the card rendering rather than
+ * silently drawing in the browser default.
+ *
+ * Bungee ships a single weight. Asking for 900 makes the browser synthesise a
+ * bold and the letterforms smear, so every call below passes 400.
+ */
+function hudFont(): string {
+  if (typeof window === "undefined") return FONT;
+  // `next/font` puts the variable on whichever element carries its className.
+  // `layout.tsx` puts it on <body>, and custom properties only inherit
+  // downward — reading <html> returns empty and silently drops to the UI
+  // stack. Check <body> first, then <html>, so either placement resolves.
+  for (const el of [document.body, document.documentElement]) {
+    if (!el) continue;
+    const v = getComputedStyle(el).getPropertyValue("--font-hud").trim();
+    if (v) return `${v}, ${FONT}`;
+  }
+  return FONT;
+}
+
+/**
+ * Pull the HUD face into the font set before drawing.
+ *
+ * `document.fonts.ready` only settles the faces the *document* has already
+ * asked for. A face that exists solely to be drawn on a canvas is never
+ * requested by layout, so `ready` resolves immediately and `fillText` falls
+ * back without erroring. The face has to be named explicitly.
+ */
+async function loadHudFace(hud: string, sizes: number[]): Promise<void> {
+  if (typeof document === "undefined" || !document.fonts) return;
+  try {
+    await Promise.all(
+      sizes.map((px) => document.fonts.load(`400 ${px}px ${hud}`)),
+    );
+    await document.fonts.ready;
+  } catch {
+    /* fonts API unavailable or the face failed — draw with whatever resolves */
+  }
+}
+
 /** The game's name as it appears on the card. */
-const WORDMARK = ["Fisherman’s", "Nose"];
+const WORDMARK = ["FISHERMAN’S", "NOSE"];
 
 // --------------------------------------------------------------- geometry
 /** Design frame, in Figma units. */
@@ -55,7 +101,7 @@ const CAP_W = u(564);
 /** Vertical centre of the row, which both labels align to. */
 const CAP_MID = u(950 + 108 / 2);
 const SCORE_SIZE = u(96);
-const MARK_SIZE = u(40);
+const MARK_SIZE = u(32);
 const MARK_LEADING = u(54);
 
 /**
@@ -138,6 +184,13 @@ function drawCover(
 }
 
 export async function composePolaroid(spec: PolaroidSpec): Promise<Blob | null> {
+  // Canvas does not wait for webfonts. If Bungee has not finished loading it
+  // silently falls back to the UI stack and the card ships in the wrong face —
+  // no error, just a worse-looking export. Costs nothing after the first
+  // compose, because the face is cached from then on.
+  const HUD = hudFont();
+  await loadHudFace(HUD, [SCORE_SIZE, MARK_SIZE]);
+
   const canvas = document.createElement("canvas");
   canvas.width = W;
   canvas.height = H;
@@ -206,22 +259,55 @@ export async function composePolaroid(spec: PolaroidSpec): Promise<Blob | null> 
   // --- the caption row: the number on the left, the wordmark on the right.
   //     `middle` baseline on both so they sit on one optical line despite the
   //     two-and-a-half-times size difference.
-  ctx.fillStyle = VOID;
   ctx.textBaseline = "middle";
 
+  // The score is the one number anyone screenshots, so it carries the brand
+  // accent rather than the same near-black as the caption beside it.
   ctx.textAlign = "left";
-  ctx.font = `900 ${SCORE_SIZE}px ${FONT}`;
-  const pts = `${spec.score} ${Math.abs(spec.score) === 1 ? "pt" : "pts"}`;
+  ctx.fillStyle = SPLAT;
+  ctx.font = `400 ${SCORE_SIZE}px ${HUD}`;
+  const pts = `${spec.score} ${Math.abs(spec.score) === 1 ? "PT" : "PTS"}`;
   ctx.fillText(pts, CAP_X, CAP_MID);
+  const scoreRight = CAP_X + ctx.measureText(pts).width;
 
-  // Two lines, right-aligned, stacked around the same centre.
+  // The wordmark is a signature, not a headline: same face, tracked out, and
+  // stepped back in weight so it sits under the score rather than competing.
   ctx.textAlign = "right";
-  ctx.font = `400 ${MARK_SIZE}px ${FONT}`;
+  ctx.fillStyle = "rgba(18, 10, 32, 0.55)";
   const markRight = CAP_X + CAP_W;
-  const markTop = CAP_MID - ((WORDMARK.length - 1) * MARK_LEADING) / 2;
+  // Track only if the engine supports it — Safari gained `letterSpacing` late,
+  // and an unsupported set is silently ignored rather than throwing.
+  const canTrack = "letterSpacing" in ctx;
+  const setTrack = (px: number) => {
+    if (canTrack) (ctx as unknown as { letterSpacing: string }).letterSpacing = `${px}px`;
+  };
+
+  /**
+   * Fit the wordmark to whatever the score left behind.
+   *
+   * Bungee is a wide face, so a fixed pair of sizes that clears "10 PTS" runs
+   * straight through the wordmark at "120 PTS". Measuring instead of guessing
+   * means an unusually long score shrinks the signature rather than colliding
+   * with it — the score is the thing worth screenshotting, so it never gives
+   * ground.
+   */
+  const avail = markRight - scoreRight - u(24);
+  let markSize = MARK_SIZE;
+  const MARK_FLOOR = u(18);
+  for (;;) {
+    setTrack(markSize * 0.09);
+    ctx.font = `400 ${markSize}px ${HUD}`;
+    const widest = Math.max(...WORDMARK.map((l) => ctx.measureText(l).width));
+    if (widest <= avail || markSize <= MARK_FLOOR) break;
+    markSize -= u(1);
+  }
+
+  const leading = markSize * (MARK_LEADING / MARK_SIZE);
+  const markTop = CAP_MID - ((WORDMARK.length - 1) * leading) / 2;
   WORDMARK.forEach((line, i) => {
-    ctx.fillText(line, markRight, markTop + i * MARK_LEADING);
+    ctx.fillText(line, markRight, markTop + i * leading);
   });
+  setTrack(0);
 
   return new Promise((resolve) => canvas.toBlob((b) => resolve(b), "image/png"));
 }
