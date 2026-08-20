@@ -331,11 +331,21 @@ export class Game {
     // An element can be attached to a live track and still be paused, which
     // freezes `readyState` and starves the tracker of new frames.
     if (video.paused) await video.play().catch(() => {});
-    await this.waitForFirstFrame(video);
 
-    // Pay the GPU delegate's one-off shader compilation here, behind the
-    // camera-opening indicator, rather than in the first frame of the run.
-
+    // A camera that never delivers a frame is, to the player, the same thing as
+    // one they refused: there is nothing to aim with. It used to be treated as
+    // success — the wait was bounded, the timeout resolved, and the run started
+    // in FACE mode against a video producing nothing, so the take opened with
+    // the clock running and the rope parked in the middle of the screen. Report
+    // it as the acquisition failure it is instead, and let the caller fall back
+    // to drag, which the title screen already explains.
+    if (!(await this.waitForFirstFrame(video))) {
+      this.releaseCamera();
+      this.hasCamera = false;
+      this.inputMode = "touch";
+      this.video = null;
+      return false;
+    }
 
     // Acquisition only. The input mode is decided in `startRun`, not here: the
     // camera has to be requested inside the tap for iOS, but the model may
@@ -357,33 +367,34 @@ export class Game {
    * two that is a visible chunk of a thirty-second run, spent looking broken.
    *
    * Bounded, because a camera that never delivers a frame must not hang the
-   * start: on timeout the run begins anyway and tracking picks up whenever the
-   * frames do arrive.
+   * start forever. Resolves TRUE if a real frame arrived and FALSE if the wait
+   * timed out — the distinction matters, and returning `void` meant the caller
+   * could not tell "ready" from "gave up" and reported success for both.
    */
-  private waitForFirstFrame(video: HTMLVideoElement): Promise<void> {
+  private waitForFirstFrame(video: HTMLVideoElement): Promise<boolean> {
     const ready = () => video.readyState >= 2 && video.videoWidth > 0;
-    if (ready()) return Promise.resolve();
+    if (ready()) return Promise.resolve(true);
 
     return new Promise((resolve) => {
       let done = false;
-      const finish = () => {
+      const finish = (gotFrame: boolean) => {
         if (done) return;
         done = true;
         cancelAnimationFrame(raf);
         clearTimeout(timer);
-        resolve();
+        resolve(gotFrame);
       };
 
       // Polled on rAF rather than waiting on `loadeddata`: the event may already
       // have fired by the time we subscribe, and a missed event is a hang.
       let raf = 0;
       const poll = () => {
-        if (ready()) return finish();
+        if (ready()) return finish(true);
         raf = requestAnimationFrame(poll);
       };
       raf = requestAnimationFrame(poll);
 
-      const timer = setTimeout(finish, CONFIG.camera.firstFrameTimeout);
+      const timer = setTimeout(() => finish(false), CONFIG.camera.firstFrameTimeout);
     });
   }
 

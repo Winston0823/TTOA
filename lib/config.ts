@@ -422,14 +422,20 @@ export const CONFIG = {
   // ---------------------------------------------------------------- camera
   camera: {
     /**
-     * How long to wait for the camera's first real frame before starting the
-     * run anyway, in MILLISECONDS.
+     * How long to wait for the camera's first real frame before giving up on
+     * face input for this run, in MILLISECONDS.
      *
-     * Long enough to cover a normal phone opening its camera, short enough that
-     * a camera which never delivers cannot strand the player on the title
-     * screen. Tracking still attaches whenever the frames turn up.
+     * Deliberately generous. This used to be 2500ms because the timeout merely
+     * started the run anyway; now it DEMOTES the run to drag control, which is
+     * a worse outcome than another few seconds of spinner. The player is
+     * watching a "Starting the camera…" indicator the whole time and has
+     * already committed to the wait by tapping, so the bar for declaring a
+     * camera dead should be a camera that is actually dead — not a slow phone.
+     *
+     * Still bounded: a device that never delivers a frame must not strand the
+     * player on a spinner forever, and drag control is a real fallback.
      */
-    firstFrameTimeout: 2500,
+    firstFrameTimeout: 10_000,
   },
 
   // ---------------------------------------------------------------- motion
