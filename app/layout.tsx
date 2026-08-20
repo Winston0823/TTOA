@@ -25,6 +25,19 @@ const bungee = Bungee({
 export const metadata: Metadata = {
   title: "Fisherman’s Nose",
   description: "A face-tracked fishing toy. Move your nose to aim, open your mouth to sink.",
+  // The tab icon itself is `app/icon.png`, which the App Router finds and links
+  // by convention — it needs no entry here. This is the SHARE card, which does:
+  // the same art letterboxed onto the deep navy it already sits on, because a
+  // square crops badly at 1.91:1.
+  openGraph: {
+    title: "Fisherman’s Nose",
+    description: "A face-tracked fishing toy. Move your nose to aim, open your mouth to sink.",
+    images: [{ url: "/og.png", width: 1200, height: 630 }],
+  },
+  twitter: {
+    card: "summary_large_image",
+    images: ["/og.png"],
+  },
 };
 
 export const viewport: Viewport = {
