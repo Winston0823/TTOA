@@ -633,7 +633,7 @@ export default function GameShell() {
                       Still loading face tracking — start now and drag to fish
                     </p>
                   ) : (
-                    <p className="mt-[0.7cqw] text-[2.3cqw] text-foam/40">
+                    <p className="mt-[0.7cqw] text-[2.3cqw] font-black uppercase tracking-[0.14em] text-foam/40">
                       {CONFIG.runDuration}-second take
                     </p>
                   )}
