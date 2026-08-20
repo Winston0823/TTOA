@@ -21,6 +21,7 @@ const INITIAL: GameSnapshotState = {
   submerged: false,
   inputMode: "face",
   captures: [],
+  tracking: false,
 };
 
 /**
@@ -227,8 +228,8 @@ export default function GameShell() {
    * finishes into an empty stage and the player is looking at nothing, which is
    * a worse answer than the hitch it replaced.
    */
-  const [starting, setStarting] = useState<"idle" | "clearing" | "waiting">("idle");
-  const titleLeaving = starting !== "idle";
+  const [starting, setStarting] = useState<"idle" | "preparing" | "clearing">("idle");
+  const titleLeaving = starting === "clearing";
   const [resultLeaving, setResultLeaving] = useState(false);
   const popId = useRef(0);
 
@@ -292,6 +293,9 @@ export default function GameShell() {
    * this one closes over `reduced`. It calls through this ref instead, which is
    * kept pointed at the current handler.
    */
+  /** The in-flight `preload()`, so the start tap can wait on it. */
+  const preloadRef = useRef<Promise<{ ok: boolean }> | null>(null);
+
   const pulseRef = useRef(handlePulse);
   useEffect(() => {
     pulseRef.current = handlePulse;
@@ -317,7 +321,11 @@ export default function GameShell() {
       game.start();
 
       setLoading("loading");
-      const res = await game.preload();
+      // Held so the start tap can await the SAME promise rather than polling a
+      // flag. A player who taps while this is in flight is queued behind it.
+      const pending = game.preload();
+      preloadRef.current = pending;
+      const res = await pending;
       if (disposed) return;
       setLoading(res.ok ? "ready" : "failed");
     })();
@@ -362,47 +370,41 @@ export default function GameShell() {
 
   // ---- start ---------------------------------------------------------------
   /**
-   * Tap → clear the title → wait for the camera → start the run.
+   * Tap → spinner → everything ready → clear the title → start the run.
    *
-   * Three things are deliberately ordered here.
+   * The player may tap before the face model has finished downloading (~6MB
+   * from two third-party CDNs, and the button is deliberately not gated on it).
+   * Rather than starting the run on drag control and swapping to face control
+   * underneath them, the tap WAITS: the button becomes a spinner and the run
+   * begins only once the camera is delivering frames and the model is loaded.
+   * A take is thirty seconds, and one that starts before its controls work is
+   * worse than one that starts a second later.
    *
-   * The run starts LAST. It used to start the instant the phase flipped, which
-   * meant the clock could be running behind a title screen the player could
-   * still see, and — worse — against a camera that had not produced a frame
-   * yet, so the rope sat frozen and unresponsive while the take burned down.
-   *
-   * The camera is opened in PARALLEL with the exit, so a fast phone hides the
-   * whole thing behind the animation.
-   *
-   * And nothing here waits for the face model. It is ~6MB from two third-party
-   * CDNs and the single longest wait in the app; holding the button for it made
-   * a slow network look like a broken camera. Touch is a complete way to play,
-   * so the run starts without it and `initCamera` decides the input mode from
-   * whatever has actually landed by then.
+   * `initCamera` is called first and not awaited, because the camera has to be
+   * requested inside this gesture for iOS. The model is awaited alongside it,
+   * not after it, so the two overlap.
    */
   const handleStart = useCallback(async () => {
     const game = gameRef.current;
     const video = videoRef.current;
     if (!game || !video || starting !== "idle") return;
 
-    setStarting("clearing");
+    setStarting("preparing");
 
-    // Camera + audio must both be kicked off inside this gesture for iOS.
-    let cameraDone = false;
-    const camera = game.initCamera(video).then((ok) => {
-      cameraDone = true;
-      return ok;
-    });
-    const cleared = new Promise<void>((r) => setTimeout(r, reduced ? 0 : M.titleOut));
+    const gotCamera = await Promise.all([
+      // Camera + audio must both be kicked off inside this gesture for iOS.
+      game.initCamera(video),
+      // Resolved, not rejected, on failure — `preload` reports through its
+      // return value, and a model that never arrives falls back to drag rather
+      // than stranding the player on a spinner.
+      preloadRef.current ?? Promise.resolve({ ok: false }),
+    ]).then(([camera]) => camera);
 
-    // Only admit to waiting if the exit finishes first — otherwise a camera
-    // that came up in 200ms would flash the indicator for a single frame.
-    cleared.then(() => {
-      if (!cameraDone) setStarting("waiting");
-    });
-
-    const [gotCamera] = await Promise.all([camera, cleared]);
     setCameraDenied(!gotCamera);
+
+    setStarting("clearing");
+    await new Promise<void>((r) => setTimeout(r, reduced ? 0 : M.titleOut));
+
     await game.startRun();
     setStarting("idle");
   }, [reduced, starting]);
@@ -528,7 +530,12 @@ export default function GameShell() {
 
             {/* Submerged outranks the mouth hint: while the player's face is
                 under the waterline nothing they do with their mouth can land a
-                fish, so telling them to open it would be actively misleading. */}
+                fish, so telling them to open it would be actively misleading.
+
+                There is deliberately no "still loading" hint here any more —
+                the run cannot start until the model has resolved, so a player
+                on drag control is one whose camera or model FAILED, and the
+                title screen has already said so. */}
             {state.phase === "playing" && state.submerged ? (
               <div className="safe-core pointer-events-none flex items-end justify-center pb-2">
                 <p className="float rounded-full bg-splat px-5 py-3 text-center text-base font-bold text-foam">
@@ -626,35 +633,30 @@ export default function GameShell() {
                     </p>
                   )}
 
-                  <StartButton onClick={handleStart} />
-
-                  {loading === "loading" ? (
-                    <p className="mt-[0.7cqw] text-[2.3cqw] text-surface/70">
-                      Still loading face tracking — start now and drag to fish
-                    </p>
+                  {/*
+                    The button is replaced by a spinner IN PLACE, at the same
+                    height, so the panel above it does not jump when the swap
+                    happens — this row is `auto` in a grid whose middle row
+                    absorbs slack, and a height change here would resize the
+                    how-to art mid-tap.
+                  */}
+                  {starting === "preparing" ? (
+                    <StartSpinner />
                   ) : (
-                    <p className="mt-[0.7cqw] text-[2.3cqw] font-black uppercase tracking-[0.14em] text-foam/40">
-                      {CONFIG.runDuration}-second take
-                    </p>
+                    <StartButton onClick={handleStart} />
                   )}
+
+                  <p className="mt-[0.7cqw] text-[2.3cqw] font-black uppercase tracking-[0.14em] text-foam/40">
+                    {starting === "preparing"
+                      ? loading === "loading"
+                        ? "Getting face tracking ready…"
+                        : "Starting the camera…"
+                      : `${CONFIG.runDuration}-second take`}
+                  </p>
                 </div>
               </div>
             </div>
 
-            {/*
-              Opening a camera is 1-3 seconds on a lot of phones. The exit is
-              300ms, so on those phones the animation lands on an empty stage —
-              and an empty stage right after a tap reads as a crash. The scrim
-              and the panels have animated away by now, so this sits over the
-              live feed as it comes up rather than over a dead screen.
-            */}
-            {starting === "waiting" && (
-              <div className="motion-screen-in absolute inset-0 grid place-items-center">
-                <p className="rounded-full bg-void/80 px-[4cqw] py-[2.4cqw] text-[3cqw] font-black uppercase tracking-wide text-foam ring-1 ring-surface/25 backdrop-blur-sm">
-                  Waking the camera…
-                </p>
-              </div>
-            )}
           </div>
         )}
 
@@ -1487,6 +1489,26 @@ function StartButton({ onClick }: { onClick: () => void }) {
         onError={() => setOk(false)}
       />
     </button>
+  );
+}
+
+/**
+ * Shown while a tapped start is waiting on the camera and the model.
+ *
+ * Sized to the button it replaces so the layout does not shift. The ring is a
+ * conic gradient masked to its own edge rather than a spinning border, because
+ * a border spinner at this size shows its corners.
+ */
+function StartSpinner() {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      aria-label="Getting ready"
+      className="grid h-[13.2cqw] w-full place-items-center"
+    >
+      <span className="motion-spin block h-[7cqw] w-[7cqw] rounded-full [background:conic-gradient(from_0deg,transparent_0turn,#ff2d9b_0.85turn,#ff2d9b_1turn)] [mask:radial-gradient(farthest-side,transparent_calc(100%-0.9cqw),#000_calc(100%-0.85cqw))] [-webkit-mask:radial-gradient(farthest-side,transparent_calc(100%-0.9cqw),#000_calc(100%-0.85cqw))]" />
+    </div>
   );
 }
 

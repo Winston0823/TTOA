@@ -98,6 +98,11 @@ export interface GameSnapshotState {
   gulps: number;
   /** The player's face has dropped below the waterline — nothing can be landed. */
   submerged: boolean;
+  /**
+   * Face tracking is live this frame. False while the model is still coming
+   * down, which a run is allowed to start without.
+   */
+  tracking: boolean;
   inputMode: InputMode;
   captures: Capture[];
 }
@@ -169,6 +174,8 @@ export class Game {
 
   private inputMode: InputMode = "face";
   private touch: { x: number; y: number } | null = null;
+  /** Whether a camera stream is actually attached and live. */
+  private hasCamera = false;
   private lastSample: FaceSample = {
     noseX: 0.5,
     noseY: 0.46,
@@ -243,14 +250,25 @@ export class Game {
 
   /** Preloads MediaPipe. Called on the title screen, never on first play. */
   async preload(): Promise<{ ok: boolean; error?: string }> {
+    // Assigned only AFTER `load()` resolves. It used to be assigned first, so
+    // `this.tracker` was truthy for the whole several-second download — long
+    // enough for a run to start against a tracker that could not yet track.
+    // Everything that asks "can we do face input" now also checks `ready`, and
+    // both are true at the same moment.
+    const tracker = new FaceTracker();
     try {
-      this.tracker = new FaceTracker();
-      await this.tracker.load();
+      await tracker.load();
+      this.tracker = tracker;
       return { ok: true };
     } catch (e) {
       this.tracker = null;
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
     }
+  }
+
+  /** Face input is possible only with a camera AND a loaded model. */
+  private get canTrackFace(): boolean {
+    return this.hasCamera && !!this.tracker?.ready;
   }
 
   /** True when the element is showing a stream whose video track is still live. */
@@ -303,6 +321,7 @@ export class Game {
         });
         video.srcObject = stream;
       } catch {
+        this.hasCamera = false;
         this.inputMode = "touch";
         this.video = null;
         return false;
@@ -314,10 +333,16 @@ export class Game {
     if (video.paused) await video.play().catch(() => {});
     await this.waitForFirstFrame(video);
 
-    // Decided here, and re-decided on every run: a player whose first take was
-    // touch-only because the model had not landed gets face control on their
-    // next one without doing anything.
-    this.inputMode = this.tracker ? "face" : "touch";
+    // Pay the GPU delegate's one-off shader compilation here, behind the
+    // camera-opening indicator, rather than in the first frame of the run.
+
+
+    // Acquisition only. The input mode is decided in `startRun`, not here: the
+    // camera has to be requested inside the tap for iOS, but the model may
+    // still be in flight at that moment, and a run is no longer allowed to
+    // begin until it has landed. Deciding here would read a `ready` flag that
+    // is about to change.
+    this.hasCamera = true;
     return true;
   }
 
@@ -370,6 +395,18 @@ export class Game {
   async startRun() {
     await this.audio.start();
     this.audio.startBass();
+
+    // Decided here rather than at camera time, so it reads the model's state at
+    // the last possible moment. By now the shell has already waited for the
+    // model, so `canTrackFace` is only false if it genuinely failed to load.
+    this.inputMode = this.canTrackFace ? "face" : "touch";
+
+    // The GPU delegate compiles its shaders on first use: measured at ~175ms
+    // against an ~11ms median. Spent here, behind the start spinner, rather
+    // than as a stutter in the first frame the player tries to aim in.
+    if (this.inputMode === "face" && this.video && this.tracker) {
+      await this.tracker.warmUp(this.video);
+    }
 
     this.phase = "playing";
     this.caught = 0;
@@ -1023,6 +1060,7 @@ export class Game {
         this.noMouthTime > CONFIG.mouthHintDelay,
       gulps: this.gulps,
       submerged: this.phase === "playing" && this.submerged,
+      tracking: this.inputMode === "face" && this.canTrackFace,
       inputMode: this.inputMode,
       captures: this.captures,
     });

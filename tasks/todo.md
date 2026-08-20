@@ -127,3 +127,44 @@ ternary beside the `failed` branch.
 No mid-run hot-swap to face control if the model lands during a take — it would
 yank the hook to the player's nose out from under an active drag. The run they
 started is the run they finish.
+
+## Start gating, take 2 (2026-08-20)
+Take 1 let the run begin on drag control and upgrade to face control mid-run.
+Rejected in review: a 30-second take that starts before its controls work is
+worse than one that starts a second later. Replaced with: tap is always
+available, but it WAITS behind a spinner until everything is ready.
+
+- [x] **Root cause of "the rope takes a while to track".** `preload()` assigned
+      `this.tracker` BEFORE awaiting `load()`, so the tracker was truthy for the
+      entire multi-second download. `initCamera` picked face mode from that
+      truthiness, `detect()` returned its centred `ok:false` sample because the
+      landmarker was still null, and the rope sat frozen mid-screen with the
+      clock running. `FaceTracker.ready` existed the whole time and nothing read
+      it. Tracker is now assigned only after `load()` resolves, and
+      `canTrackFace` checks `ready`.
+- [x] Start tap waits on camera AND model, both awaited together so they
+      overlap. `initCamera` is called first and unawaited so `getUserMedia`
+      stays inside the gesture for iOS.
+- [x] Input mode decided in `startRun`, not `initCamera` — it must read the
+      model's state at the last possible moment.
+- [x] `FaceTracker.warmUp()` — the GPU delegate compiles shaders on first use.
+      **Measured in-browser: first `detectForVideo` 175ms vs ~11ms median.**
+      Now spent behind the spinner instead of in frame one of the run.
+- [x] Spinner replaces the button in place, same height, so the how-to art does
+      not resize mid-tap.
+- [x] Reverted from take 1: mid-run handover, `CONFIG.camera.handoverTime`, the
+      "still loading" in-game hint.
+
+### Verified live
+| path | result |
+| --- | --- |
+| model still loading (600s test delay) | button swaps to spinner, title held, run does NOT start, note reads "Getting face tracking ready…" |
+| normal | no spinner, run starts in 429ms, clock 30s, video delivering 640x480 |
+| camera denied (earlier) | no hang, touch mode |
+
+### Testing note
+Early runs of this test were INVALID: my own tool round-trip left the page idle
+for ~30s between navigate and click, so the model always finished loading before
+the tap. Console timestamps showed preload finishing at 28s while the click
+happened at 34s. Any future test of a loading state needs an artificial delay
+longer than the harness round-trip, not just a cache-bust.

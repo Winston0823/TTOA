@@ -589,3 +589,21 @@ body {
   from { opacity: 1; }
   to { opacity: 0; }
 }
+
+/* The start spinner. Transform-only, so it stays on the compositor while the
+   camera and the face model are both coming up behind it. */
+@keyframes motionSpin {
+  to { transform: rotate(1turn); }
+}
+
+.motion-spin {
+  animation: motionSpin 750ms linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Kept, deliberately: this one is a progress indicator, and a frozen spinner
+     says "hung" rather than "working". Slowed instead. */
+  .motion-spin {
+    animation-duration: 1600ms;
+  }
+}
