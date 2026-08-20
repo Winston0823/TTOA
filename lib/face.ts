@@ -56,6 +56,14 @@ class Ema {
 export class FaceTracker {
   private landmarker: unknown = null;
   private lastVideoTime = -1;
+  /**
+   * The last timestamp actually handed to MediaPipe.
+   *
+   * NOT cleared by `reset()`, deliberately — see `detect`. The graph's clock
+   * belongs to the landmarker instance rather than to a run, so a second run
+   * has to carry on from where the first left off.
+   */
+  private lastTimestampMs = -Infinity;
   private noseXEma = new Ema(CONFIG.noseEma);
   private noseYEma = new Ema(CONFIG.noseEma);
   private mouthXEma = new Ema(CONFIG.noseEma);
@@ -136,9 +144,29 @@ export class FaceTracker {
     if (video.currentTime === this.lastVideoTime) return this.lastSample;
     this.lastVideoTime = video.currentTime;
 
+    // MediaPipe's VIDEO mode requires STRICTLY increasing timestamps, and a
+    // violation is not survivable: the packet is not merely dropped, the
+    // CalculatorGraph enters a permanent error state and every subsequent
+    // `detectForVideo` throws for the lifetime of the landmarker. The catch
+    // below then hands back a stale sample forever, so the rope hangs off the
+    // centre of the screen instead of the player's face and the mouth never
+    // pays out — while Emscripten prints the failure 30 times a second.
+    //
+    // The two call sites cannot guarantee this between themselves: `warmUp`
+    // reads `performance.now()`, while the game loop passes the rAF timestamp,
+    // and a rAF timestamp is the moment the frame BEGAN — so it can legitimately
+    // be up to one frame EARLIER than a `performance.now()` taken partway
+    // through that same frame. Measured here: expected 16076.701ms, received
+    // 16065.800ms, 10.9ms in the past, on the first loop frame after warm-up.
+    //
+    // So the clock is enforced at the one place that knows what was last fed to
+    // the graph, rather than trusted to agree across call sites.
+    const t = Math.max(timestampMs, this.lastTimestampMs + 1);
+    this.lastTimestampMs = t;
+
     let result;
     try {
-      result = lm.detectForVideo(video, timestampMs);
+      result = lm.detectForVideo(video, t);
     } catch {
       return this.lastSample;
     }
